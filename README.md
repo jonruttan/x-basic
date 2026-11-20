@@ -34,22 +34,25 @@ The 6502 dialect (`basic/m6502.x`):
   reads lines as typed, where only capitals are reserved words, as on
   the 6502.
 - **Numbers.** The five-byte format, built of integers (`basic/mbf.x`):
-  a 32-bit mantissa, a guard byte rounded half up, `?OV` past 2^127,
-  nine digits printed, fixed notation from .01 to 999999999.
+  a value is the floating accumulator, four mantissa bytes and the
+  guard byte, rounded only where the 6502 rounds, its multiply's lost
+  bit included. `?OV` past 2^127, nine digits printed, fixed notation
+  from .01 to 999999999.
 - **Statements.** `PRINT` (with `,` zones of 14, `;`, `TAB(`, `SPC(`),
   `LET`, `GOTO`, `GOSUB`, `RETURN`, `IF ... THEN`, `IF ... GOTO`,
   `ON ... GOTO|GOSUB`, `FOR ... TO ... STEP`, `NEXT`, `DIM`, `DATA`,
   `READ`, `RESTORE`, `INPUT`, `END`, `STOP`, `CONT`, `REM`, `RUN`,
   `LIST`, `NEW`, `CLEAR`.
 - **Functions.** `SGN INT ABS LEN STR$ VAL ASC CHR$ LEFT$ RIGHT$ MID$
-  POS`.
+  POS`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
+  `EXP(Y*LOG(X))`, step for step from the source's tables
+  (`basic/mbf-math.x`).
 - **Errors.** Two-letter, as the KIM build prints them:
   `?SN ERROR IN  20`.
 
-Not yet: `DEF FN`, `SQR RND LOG EXP SIN COS TAN ATN`, `PEEK POKE USR
-WAIT FRE NULL GET LOAD SAVE`, and `^` other than to an integer power,
-which the 6502 computes as `EXP(Y*LOG(X))`. A program run from a file
-(`x -l basic -f FILE`) or piped in waits on a line reader in x-lang.
+Not yet: `DEF FN`, `PEEK POKE USR WAIT FRE NULL GET LOAD SAVE`. A
+program run from a file (`x -l basic -f FILE`) or piped in waits on a
+line reader in x-lang.
 
 ## Install
 
