@@ -22,6 +22,7 @@
 (import x/type/str)
 (import x/type/dict)
 (import x/reader/lexer)
+(import x/core/doors int+ int- int< int= str-byte-ref)
 
 ; A dialect's lexer, made when a line of it is first read
 (def %basic-lexers (Dict make))
@@ -59,4 +60,39 @@
             tok))
         ((%basic-lexer dialect) read-str text)))))
 
-(provide basic/lex basic-lex)
+; Where a span token's own text starts: past REM's and DATA's word, which
+; is folded with the rest
+(def %basic-span-skip
+  (fn (_ tok)
+    (match
+      ((eq? (first tok) (lit rem)) 3)
+      ((eq? (first tok) (lit data)) 4)
+      (#t 0))))
+
+; TEXT with every byte outside a string, a REM's remark and DATA's items
+; upper-cased, so `print a` is PRINT A.  The spans are found by lexing the
+; upper-cased text, whose bytes stand where TEXT's do.
+(def basic-fold
+  (fn (_ dialect text)
+    (let ((up (Str8 upcase text)))
+      (if (str=? up text) text
+        (let ((n (Str8 length text)))
+          (let ((blank? (fn (_ i) (let ((b (str-byte-ref up i))) (or (int= b 32) (int= b 10))))))
+            (let ((go (fn (self toks pos from acc)
+                        ; POS the byte the next token is looked for at; FROM
+                        ; the first byte not yet in ACC, the pieces reversed
+                        (if (null? toks)
+                          (List fold (fn (_ s p) (Str8 append p s)) (Str8 sub from (int- n from) up) acc)
+                          (let ((start (let ((skip (fn (self i) (if (and (int< i n) (blank? i)) (self (int+ i 1)) i))))
+                                         (skip pos)))
+                                (tok (first toks)))
+                            (let ((len (Str8 length (List second tok))) (k (%basic-span-skip tok)))
+                              (if (and (int= k 0) (not (eq? (first tok) (lit str))))
+                                (self (rest toks) (int+ start len) from acc)
+                                (let ((at (int+ start k)) (end (int+ start len)))
+                                  (self (rest toks) end end
+                                        (pair (Str8 sub at (int- end at) text)
+                                              (pair (Str8 sub from (int- at from) up) acc)))))))))))
+              (go ((%basic-lexer dialect) read-str up) 0 0 ()))))))))
+
+(provide basic/lex basic-lex basic-fold)

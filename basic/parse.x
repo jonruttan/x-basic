@@ -427,8 +427,10 @@
     (let ((t (first ts)))
       (match
         ((eq? (first t) (lit rem)) (pair (list (list (lit rem))) (rest ts)))
+        ; the colon that ended the DATA token is the separator after it
         ((eq? (first t) (lit data))
-          (pair (list (list (lit data) (basic-items (%bp-data-text (List second t))))) (rest ts)))
+          (pair (list (list (lit data) (basic-items (%bp-data-text (List second t)))))
+                (if (Str8 ends? ":" (List second t)) (pair (list (lit c) ":") (rest ts)) (rest ts))))
         ((%bp-letter? (%bp-byte ts)) (%bp-assign ts))
         ((not (eq? (first t) (lit kw))) (%bp-fail))
         (#t
