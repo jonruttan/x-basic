@@ -27,8 +27,10 @@
 (import x/type/err)
 (import x/core/doors int+ int- int* int/ int% int< int= int& int| str-byte-ref)
 (import basic/mbf
-  mbf-zero mbf-zero? mbf-int mbf-neg mbf-abs mbf-sgn mbf-cmp mbf-add mbf-sub
+  mbf-zero mbf-zero? mbf-int mbf-neg mbf-abs mbf-sgn mbf-cmp mbf-round mbf-add mbf-sub
   mbf-mul mbf-div mbf-floor mbf->int mbf->str)
+(import basic/mbf-math
+  mbf-log mbf-exp mbf-power mbf-sqr mbf-sin mbf-cos mbf-tan mbf-atn mbf-rnd-seed mbf-rnd)
 (import basic/lex basic-lex)
 (import basic/parse basic-parse-line basic-parse-value basic-items)
 
@@ -47,6 +49,8 @@
       (m set! (lit in) in)
       (m set! (lit col) 0)
       (m set! (lit lines) ())
+      ; RND's last value; CLEAR and RUN leave it
+      (m set! (lit rnd) mbf-rnd-seed)
       (%bx-index! m)
       (%bx-clear! m)
       m)))
@@ -149,7 +153,7 @@
     (match
       ((%bx-string-name? name) (%bx-string v))
       ((%bx-int-name? name) (mbf-int (%bx-word v)))
-      (#t (%bx-number v)))))
+      (#t (mbf-round (%bx-number v))))))
 
 ; --- variables and arrays -------------------------------------------------
 
@@ -200,15 +204,6 @@
 
 ; --- expressions ----------------------------------------------------------
 
-; A raised to the integer power N by multiplying
-(def %bx-power
-  (fn (_ a b)
-    (let ((n (mbf->int b 65536)))
-      (unless (= (mbf-cmp (mbf-int n) b) 0) (%bx-todo "^"))
-      (let ((go (fn (self k acc) (if (int= k 0) acc (self (int- k 1) (mbf-mul acc a))))))
-        (let ((p (go (if (int< n 0) (int- 0 n) n) (mbf-int 1))))
-          (if (int< n 0) (mbf-div (mbf-int 1) p) p))))))
-
 ; A 16-bit two's complement word as a signed integer
 (def %bx-signed
   (fn (_ w) (if (int< w 32768) w (int- w 65536))))
@@ -218,11 +213,11 @@
     (match
       ((str=? word "+")
         (if (and (not (pair? a)) (not (pair? b))) (%bx-checked (Str8 append a b))
-          (mbf-add (%bx-number a) (%bx-number b))))
-      ((str=? word "-") (mbf-sub (%bx-number a) (%bx-number b)))
-      ((str=? word "*") (mbf-mul (%bx-number a) (%bx-number b)))
+          (mbf-add (mbf-round (%bx-number a)) (%bx-number b))))
+      ((str=? word "-") (mbf-sub (mbf-round (%bx-number a)) (%bx-number b)))
+      ((str=? word "*") (mbf-mul (%bx-number b) (%bx-number a)))
       ((str=? word "/") (mbf-div (%bx-number a) (%bx-number b)))
-      ((str=? word "^") (%bx-power (%bx-number a) (%bx-number b)))
+      ((str=? word "^") (mbf-power (mbf-round (%bx-number a)) (%bx-number b)))
       ((str=? word "AND")
         (mbf-int (%bx-signed (int& (int& (%bx-word a) 65535) (int& (%bx-word b) 65535)))))
       (#t
@@ -284,6 +279,16 @@
               (if (int< left 1) ""
                 (Str8 sub (int- i 1) (if (int< left n) left n) s)))))
         ((str=? word "POS") (mbf-int (m get (lit col))))
+        ((str=? word "SQR") (mbf-sqr (%bx-number a)))
+        ((str=? word "LOG") (mbf-log (%bx-number a)))
+        ((str=? word "EXP") (mbf-exp (%bx-number a)))
+        ((str=? word "SIN") (mbf-sin (%bx-number a)))
+        ((str=? word "COS") (mbf-cos (%bx-number a)))
+        ((str=? word "TAN") (mbf-tan (%bx-number a)))
+        ((str=? word "ATN") (mbf-atn (%bx-number a)))
+        ((str=? word "RND")
+          (let ((got (mbf-rnd (%bx-number a) (m get (lit rnd)))))
+            (do (m set! (lit rnd) (rest got)) (first got))))
         (#t (%bx-todo word))))))
 
 (def %bx-eval
@@ -447,7 +452,7 @@
       (let ((s (go (m get (lit stack)))))
         (let ((frame (first s)))
           (let ((var (List second frame)) (limit (List third frame)) (step (List ref 3 frame)))
-            (let ((v (mbf-add ((m get (lit vars)) get-or mbf-zero var) step)))
+            (let ((v (mbf-round (mbf-add ((m get (lit vars)) get-or mbf-zero var) step))))
               ((m get (lit vars)) set! var v)
               (if (int= (mbf-cmp v limit) (mbf-sgn step))
                 (do (m set! (lit stack) (rest s)) ())
@@ -508,9 +513,9 @@
     (let ((name (List second st)))
       (do
         (%bx-set! m (list (lit var) name) (%bx-eval m (List third st)))
-        (let ((limit (%bx-number (%bx-eval m (List ref 3 st))))
+        (let ((limit (mbf-round (%bx-number (%bx-eval m (List ref 3 st)))))
               (step (if (null? (List ref 4 st)) (mbf-int 1)
-                      (%bx-number (%bx-eval m (List ref 4 st))))))
+                      (mbf-round (%bx-number (%bx-eval m (List ref 4 st)))))))
           (m set! (lit stack)
             (pair (list (lit for) name limit step (pair index after))
                   (%bx-drop-for (m get (lit stack)) name))))
