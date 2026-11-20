@@ -1,0 +1,20 @@
+; lang.xon -- what this bundle is.
+;
+; xon: read with the ordinary reader and never evaluated, like every manifest
+; in the x-lang world.  An unknown form is a loud error, never a silent skip.
+;
+; FORMAT (one form per line):
+;   (lang "NAME")               the -l name
+;   (dialect NAME)              he | xe | rn -- a requirement
+;   (requires-release "TAG")    the x-lang this bundle was built against
+;   (entry "FILE")              loaded AFTER the dialect, not instead of it
+
+(lang "basic")
+
+; Helium: a BASIC's numbers are its own formats, made of integers (basic/mbf),
+; and nothing here needs a socket or a process.
+(dialect he)
+
+(requires-release "v0.59.0")
+
+(entry "run.x")
