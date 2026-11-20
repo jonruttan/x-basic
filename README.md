@@ -28,6 +28,11 @@ The 6502 dialect (`basic/m6502.x`):
   are found inside names, as CRUNCH finds them: `FORI=1TO9`, and `SCORE`
   is `SC OR E`. `?` is `PRINT`. Names are two characters and a `$` or
   `%`.
+- **Case.** Reserved words and names read in either case: a typed line
+  is upper-cased, all but its strings, REM's remark and DATA's items, so
+  LIST shows capitals. `X_BASIC_FOLD_CASE=0` (or `no`, `off`, `false`)
+  reads lines as typed, where only capitals are reserved words, as on
+  the 6502.
 - **Numbers.** The five-byte format, built of integers (`basic/mbf.x`):
   a 32-bit mantissa, a guard byte rounded half up, `?OV` past 2^127,
   nine digits printed, fixed notation from .01 to 999999999.

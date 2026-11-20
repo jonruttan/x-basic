@@ -15,6 +15,7 @@
 (import basic/lex basic-lex)
 (import basic/mbf mbf-int mbf-div mbf-mul mbf-add mbf->str mbf-bytes)
 (import basic/exec basic-machine basic-type)
+(import basic/repl basic-fold-case-setting)
 
 ; TEXT's lines typed into a new 6502 machine, shown as a terminal shows
 ; them: each typed line, then what it printed.  REPLIES are the lines typed

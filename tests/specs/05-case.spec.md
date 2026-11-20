@@ -76,3 +76,16 @@ print 1
 ?SN ERROR
 OK
 ```
+
+## the switch
+
+### X_BASIC_FOLD_CASE: unset or empty keeps the default; 0, no, off or false turn folding off
+
+```x
+(List map (fn (_ v) (basic-fold-case-setting v #t))
+          (list () "" "0" "no" "OFF" "False" "1" "yes"))
+```
+---
+```output
+(#t #t #f #f #f #f #t #t)
+```
