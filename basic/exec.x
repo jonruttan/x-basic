@@ -31,7 +31,7 @@
   mbf-mul mbf-div mbf-floor mbf->int mbf->str)
 (import basic/mbf-math
   mbf-log mbf-exp mbf-power mbf-sqr mbf-sin mbf-cos mbf-tan mbf-atn mbf-rnd-seed mbf-rnd)
-(import basic/lex basic-lex)
+(import basic/lex basic-lex basic-fold)
 (import basic/parse basic-parse-line basic-parse-value basic-items)
 
 (def %bx-fail (fn (_ code) (Err raise (lit basic) code)))
@@ -48,6 +48,8 @@
       (m set! (lit out) out)
       (m set! (lit in) in)
       (m set! (lit col) 0)
+      ; whether a typed line is upper-cased outside its strings, REM and DATA
+      (m set! (lit fold-case) (dialect get-or #t (lit fold-case)))
       (m set! (lit lines) ())
       ; RND's last value; CLEAR and RUN leave it
       (m set! (lit rnd) mbf-rnd-seed)
@@ -651,9 +653,9 @@
                   (Str8 append "?" (Err text r) " IS NOT IN X-BASIC YET" (%bx-where m))))))))
     (%bx-ready m)))
 
-; A line typed: stored when it starts with a line number, else run.  The
-; digits and the blanks after them are the number, as LINGET reads them.
-(def basic-type
+; A line stored when it starts with a line number, else run.  The digits
+; and the blanks after them are the number, as LINGET reads them.
+(def %bx-typed
   (fn (_ m text)
     (let ((n (Str8 length text)))
       (let ((skip (fn (self i) (if (and (int< i n) (int= (str-byte-ref text i) 32)) (self (int+ i 1)) i))))
@@ -672,5 +674,11 @@
                   (%bx-store! m (first got) (Str8 sub (rest got) (int- n (rest got)) text))
                   (%bx-direct m text))))
             (%bx-direct m text)))))))
+
+; A line typed, upper-cased outside its strings, REM and DATA when the
+; machine folds case
+(def basic-type
+  (fn (_ m text)
+    (%bx-typed m (if (m get (lit fold-case)) (basic-fold (m get (lit dialect)) text) text))))
 
 (provide basic/exec basic-machine basic-type)

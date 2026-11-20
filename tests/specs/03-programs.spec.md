@@ -234,6 +234,20 @@ RUN
 OK
 ```
 
+### the colon that ends DATA starts the next statement
+
+```x
+(%basic-typed "10 DATA 1:PRINT 2\nRUN")
+```
+---
+```output
+10 DATA 1:PRINT 2
+RUN
+ 2 
+
+OK
+```
+
 ## strings
 
 ### the string functions

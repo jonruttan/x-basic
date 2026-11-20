@@ -34,6 +34,8 @@
       (lit zone) 14
       (lit width) 72
       (lit array-size) 11
-      (lit name-length) 2)))
+      (lit name-length) 2
+      ; names and reserved words read in either case, as later BASICs do
+      (lit fold-case) #t)))
 
 (provide basic/m6502 m6502-dialect)
