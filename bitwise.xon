@@ -1,0 +1,9 @@
+; bitwise.xon -- what this project's owl wears.
+;
+; Bitwise is the ASCII owl in every x source header; x-lang's apps/bitwise
+; draws it for a named project, and this file is this project's own say in
+; how it looks.  See x-lang's apps/bitwise for the fields.
+
+(costume "x-basic"
+  (label "a language on x-lang")
+  (reference "10 PRINT \"{O,O}\""))
