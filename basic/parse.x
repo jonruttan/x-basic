@@ -168,6 +168,11 @@
             (pair (first got) (%bp-expect-c (rest got) ")"))))
         ((or (%bp-digit? (%bp-byte ts)) (%bp-c? ts ".")) (%bp-number ts))
         ((%bp-letter? (%bp-byte ts)) (%bp-target ts))
+        ; FN, a name, and its argument in parentheses (FNDOER)
+        ((%bp-kw? ts "FN")
+          (let ((name (%bp-name (rest ts))))
+            (let ((got (basic-parse-expr (%bp-expect-c (rest name) "("))))
+              (pair (list (lit fn) (first name) (first got)) (%bp-expect-c (rest got) ")")))))
         ((eq? (first t) (lit kw))
           (let ((fun (List find (fn (_ f) (str=? (first f) (List second t))) %bp-functions)))
             (if (null? fun) (%bp-fail)
@@ -409,6 +414,31 @@
           (pair (list (list (lit list) (first from) (first to))) (rest to)))
         (pair (list (list (lit list) (first from) (first from))) (rest from))))))
 
+; TS split at its first colon: (BEFORE . FROM-THE-COLON)
+(def %bp-to-colon
+  (fn (_ ts)
+    (let ((go (fn (self ts acc)
+                (if (%bp-end? ts) (pair (List reverse acc) ts) (self (rest ts) (pair (first ts) acc))))))
+      (go ts ()))))
+
+; A DEF's formula: its expression, or bad when it does not parse whole.
+; DEF skips the formula's text as DATA does and FN reads it, so its error
+; is the call's.
+(def %bp-formula
+  (fn (_ ts)
+    (guard (e (if (eq? (Err label e) (lit basic)) (lit bad) (error e)))
+      (let ((got (basic-parse-expr ts)))
+        (if (null? (rest got)) (first got) (lit bad))))))
+
+; DEF FN NAME(ARG)=FORMULA: (def NAME ARG FORMULA)
+(def %bp-def
+  (fn (_ ts)
+    (let ((name (%bp-name (%bp-expect-kw ts "FN"))))
+      (let ((arg (%bp-name (%bp-expect-c (rest name) "("))))
+        (let ((formula (%bp-to-colon (%bp-expect-kw (%bp-expect-c (rest arg) ")") "="))))
+          (pair (list (list (lit def) (first name) (first arg) (%bp-formula (first formula))))
+                (rest formula)))))))
+
 ; A statement with a line number after it, or none
 (def %bp-jump
   (fn (_ ts tag)
@@ -457,6 +487,7 @@
                 ((str=? word "RUN")
                   (if (%bp-end? ts) (pair (list (list (lit run) ())) ts) (%bp-jump ts (lit run))))
                 ((str=? word "LIST") (%bp-list ts))
+                ((str=? word "DEF") (%bp-def ts))
                 (#t (pair (list (list (lit todo) word)) ()))))))))))
 
 ; A line's tokens as its statements.  Parsing stops at the first statement
