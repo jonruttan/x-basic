@@ -19,6 +19,7 @@
 (import x/repl/lang)
 (import basic/m6502 m6502-dialect)
 (import basic/exec basic-machine basic-type)
+(import basic/term basic-term-out basic-term-zeros)
 
 ; The session's machine, made when the first line is typed
 (def %basic-session (Dict make))
@@ -40,7 +41,7 @@
 (def %basic-machine
   (fn (_)
     (unless (%basic-session has? (lit m))
-      (let ((m (basic-machine m6502-dialect display %basic-reply)))
+      (let ((m (basic-machine m6502-dialect basic-term-out basic-term-zeros %basic-reply)))
         (m set! (lit fold-case)
           (basic-fold-case-setting (Sys getenv "X_BASIC_FOLD_CASE") (m get (lit fold-case))))
         (%basic-session set! (lit m) m)))

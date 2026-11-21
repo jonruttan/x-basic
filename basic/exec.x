@@ -39,15 +39,20 @@
 
 ; --- the machine ----------------------------------------------------------
 
-; A machine for DIALECT, writing with OUT and reading lines with IN (a
-; function answering the next line, or nil at the end)
+; A machine for DIALECT, writing text with OUT and N zero bytes with
+; (ZEROS N), and reading lines with IN (a function answering the next line,
+; or nil at the end)
 (def basic-machine
-  (fn (_ dialect out in)
+  (fn (_ dialect out zeros in)
     (let ((m (Dict make)))
       (m set! (lit dialect) dialect)
       (m set! (lit out) out)
+      (m set! (lit zeros) zeros)
       (m set! (lit in) in)
       (m set! (lit col) 0)
+      ; NULL's count, the zero bytes after each new line; NEW and CLEAR
+      ; leave it
+      (m set! (lit nulls) 0)
       ; whether a typed line is upper-cased outside its strings, REM and DATA
       (m set! (lit fold-case) (dialect get-or #t (lit fold-case)))
       (m set! (lit lines) ())
@@ -108,14 +113,19 @@
           (do ((m get (lit out)) text)
               (m set! (lit col) (int+ (m get (lit col)) n)))
           (do ((m get (lit out)) (Str8 sub 0 room text))
-              ((m get (lit out)) "\n")
-              (m set! (lit col) 0)
+              (%bx-newline m)
               (%bx-out m (Str8 sub room (int- n room) text))))))))
+
+; The zero bytes CRDO prints after a new line, NULL's count of them
+(def %bx-nulls
+  (fn (_ m)
+    (when (int< 0 (m get (lit nulls))) ((m get (lit zeros)) (m get (lit nulls))))
+    (m set! (lit col) 0)))
 
 (def %bx-newline
   (fn (_ m)
     ((m get (lit out)) "\n")
-    (m set! (lit col) 0)))
+    (%bx-nulls m)))
 
 (def %bx-spaces
   (fn (_ m n) (when (int< 0 n) (%bx-out m (Str8 repeat n " ")))))
@@ -402,7 +412,7 @@
   (fn (_ m prompt)
     (%bx-out m prompt)
     (let ((line ((m get (lit in)))))
-      (m set! (lit col) 0)
+      (%bx-nulls m)
       line)))
 
 ; INPUT: answers end when the reply is empty, so the program stops
@@ -518,6 +528,13 @@
       (when (%bx-string-name? arg) (%bx-fail "TM"))
       ((m get (lit fns)) set! name (pair arg (List ref 3 st))))))
 
+; NULL N: N zero bytes after each new line from now on.  GETBYT takes 0 to
+; 255, and NULL refuses 239 and above as unreasonable.
+(def %bx-null
+  (fn (_ m e)
+    (let ((n (%bx-byte (%bx-eval m e))))
+      (if (int< 238 n) (%bx-fail "FC") (m set! (lit nulls) n)))))
+
 ; A statement run for its effect, which goes on to the next
 (def %bx-effect
   (fn (_ m st tag)
@@ -532,6 +549,7 @@
       ((eq? tag (lit list)) (%bx-list m (List second st) (List third st)))
       ((eq? tag (lit clear)) (%bx-clear! m))
       ((eq? tag (lit def)) (%bx-def m st))
+      ((eq? tag (lit null)) (%bx-null m (List second st)))
       ((eq? tag (lit bad)) (%bx-fail (List second st)))
       (#t (%bx-todo (List second st))))))
 
@@ -706,9 +724,11 @@
             (%bx-direct m text)))))))
 
 ; A line typed, upper-cased outside its strings, REM and DATA when the
-; machine folds case
+; machine folds case.  The terminal has shown its new line; the zero bytes
+; after it are the machine's, as INLIN ends with CRDO.
 (def basic-type
   (fn (_ m text)
+    (%bx-nulls m)
     (%bx-typed m (if (m get (lit fold-case)) (basic-fold (m get (lit dialect)) text) text))))
 
 (provide basic/exec basic-machine basic-type)

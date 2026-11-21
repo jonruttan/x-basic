@@ -16,6 +16,7 @@
 (import basic/mbf mbf-int mbf-div mbf-mul mbf-add mbf->str mbf-bytes)
 (import basic/exec basic-machine basic-type)
 (import basic/repl basic-fold-case-setting)
+(import basic/term basic-term-out basic-term-zeros)
 
 ; TEXT's lines typed into a new 6502 machine, shown as a terminal shows
 ; them: each typed line, then what it printed.  REPLIES are the lines typed
@@ -29,12 +30,12 @@
                   (let ((r (left get (lit replies))))
                     (if (null? r) ()
                       (do (left set! (lit replies) (rest r))
-                          (display (first r)) (newline)
+                          (basic-term-out (first r)) (basic-term-out "\n")
                           (first r)))))))
-        (let ((m (basic-machine m6502-dialect display in)))
+        (let ((m (basic-machine m6502-dialect basic-term-out basic-term-zeros in)))
           (m set! (lit fold-case) fold)
           (List for-each
-            (fn (_ line) (display line) (newline) (m set! (lit col) 0) (basic-type m line))
+            (fn (_ line) (basic-term-out line) (basic-term-out "\n") (basic-type m line))
             (Str8 split "\n" text)))))))
 
 (def %basic-typed-input (fn (_ text replies) (%basic-typed-on #t text replies)))

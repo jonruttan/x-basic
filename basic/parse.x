@@ -488,6 +488,9 @@
                   (if (%bp-end? ts) (pair (list (list (lit run) ())) ts) (%bp-jump ts (lit run))))
                 ((str=? word "LIST") (%bp-list ts))
                 ((str=? word "DEF") (%bp-def ts))
+                ((str=? word "NULL")
+                  (let ((got (basic-parse-expr ts)))
+                    (pair (list (list (lit null) (first got))) (rest got))))
                 (#t (pair (list (list (lit todo) word)) ()))))))))))
 
 ; A line's tokens as its statements.  Parsing stops at the first statement
