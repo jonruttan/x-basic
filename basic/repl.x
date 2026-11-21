@@ -18,7 +18,7 @@
 (import x/repl/line)
 (import x/repl/lang)
 (import basic/m6502 m6502-dialect)
-(import basic/exec basic-machine basic-type)
+(import basic/exec basic-machine basic-boot-begin! basic-boot-prompt basic-boot-answer! basic-type)
 (import basic/term basic-term-out basic-term-zeros)
 
 ; The session's machine, made when the first line is typed
@@ -44,25 +44,36 @@
       (let ((m (basic-machine m6502-dialect basic-term-out basic-term-zeros %basic-reply)))
         (m set! (lit fold-case)
           (basic-fold-case-setting (Sys getenv "X_BASIC_FOLD_CASE") (m get (lit fold-case))))
+        (basic-boot-begin! m)
         (%basic-session set! (lit m) m)))
     (%basic-session get (lit m))))
 
-; The seam the editor calls with a finished line
+; The seam the editor calls with a finished line: an answer to the start-up
+; question the prompt shows, or a line typed into the started machine
 (def basic-eval-line
   (fn (_ line)
     (let ((m (%basic-machine)))
       (m set! (lit col) 0)
-      (basic-type m line)
+      (if (null? (basic-boot-prompt m)) (basic-type m line)
+        (do (basic-boot-answer! m line)
+            (%basic-register! (basic-boot-prompt m))
+            (Lang use! "basic")))
       ())))
 
-(def basic-repl-register!
-  (fn (_)
+; The lang registered with PROMPT, nil for none: the editor shows the
+; start-up questions as the prompt, and nothing once the machine is ready
+(def %basic-register!
+  (fn (_ prompt)
     (Lang register! "basic"
-      (list (pair (lit %repl-prompt) "")
+      (list (pair (lit %repl-prompt) (if (null? prompt) "" prompt))
             (pair (lit %repl-prompt-more) "")
             (pair (lit %repl-paint) ())
             (pair (lit %repl-complete) ())
             (pair (lit %repl-eval-line) basic-eval-line)))))
+
+; The first prompt is the dialect's first start-up question
+(def basic-repl-register!
+  (fn (_) (%basic-register! (Str8 append (m6502-dialect get (lit memory-prompt)) "? "))))
 
 ; Whether this lang owns the session: the wrapper names the first -l in
 ; %lang-lead, and a bundle named by a later one is loaded beside it.  A

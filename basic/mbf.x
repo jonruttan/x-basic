@@ -93,6 +93,16 @@
                         (int+ (int<< m2 24) (int+ (int<< m3 16) (int<< m4 8))))))
         (pair (if (int< m1 128) mant (int- 0 mant)) (int- ex 168))))))
 
+; A's packed bytes (EXP M1 M2 M3 M4), as MOVMF stores it rounded
+(def mbf->bytes
+  (fn (_ a)
+    (let ((r (mbf-round a)))
+      (if (mbf-zero? r) (list 0 0 0 0 0)
+        (let ((m (%mbf-mag r)))
+          (list (int+ (rest r) 168)
+                (int+ (int& (int>> m 32) 127) (if (%mbf-neg? r) 128 0))
+                (int& (int>> m 24) 255) (int& (int>> m 16) 255) (int& (int>> m 8) 255)))))))
+
 ; The integer N, exactly when it fits the mantissa (FLOAT)
 (def mbf-int
   (fn (_ n)
@@ -377,6 +387,6 @@
   (fn (_ a ex) (pair (first a) (int- ex (int+ %mbf-bits 128)))))
 
 (provide basic/mbf
-  mbf-zero mbf-zero? mbf-bytes mbf-octal mbf-int mbf-neg mbf-abs mbf-sgn mbf-cmp
+  mbf-zero mbf-zero? mbf-bytes mbf->bytes mbf-octal mbf-int mbf-neg mbf-abs mbf-sgn mbf-cmp
   mbf-round mbf-add mbf-sub mbf-mul mbf-div mbf-floor mbf->int mbf->str
   mbf-from-digits mbf-exponent mbf-mantissa mbf-fac mbf-with-exponent)

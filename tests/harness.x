@@ -14,16 +14,17 @@
 (import basic/m6502 m6502-dialect)
 (import basic/lex basic-lex)
 (import basic/mbf mbf-int mbf-div mbf-mul mbf-add mbf->str mbf-bytes)
-(import basic/exec basic-machine basic-type)
+(import basic/exec basic-machine basic-boot basic-type)
 (import basic/repl basic-fold-case-setting)
 (import basic/term basic-term-out basic-term-zeros)
 
 ; TEXT's lines typed into a new 6502 machine, shown as a terminal shows
 ; them: each typed line, then what it printed.  REPLIES are the lines typed
 ; in answer to INPUT, shown as they are read.  FOLD is the machine's
-; fold-case.
-(def %basic-typed-on
-  (fn (_ fold text replies)
+; fold-case; BOOT, whether the machine is started first, REPLIES then
+; answering its questions.
+(def %basic-typed-boot
+  (fn (_ boot fold text replies)
     (let ((left (Dict make)))
       (left set! (lit replies) replies)
       (let ((in (fn (_)
@@ -34,9 +35,15 @@
                           (first r)))))))
         (let ((m (basic-machine m6502-dialect basic-term-out basic-term-zeros in)))
           (m set! (lit fold-case) fold)
+          (when boot (basic-boot m))
           (List for-each
             (fn (_ line) (basic-term-out line) (basic-term-out "\n") (basic-type m line))
             (Str8 split "\n" text)))))))
+
+(def %basic-typed-on (fn (_ fold text replies) (%basic-typed-boot #f fold text replies)))
+
+; A machine started with ANSWERS to its start-up questions, then TEXT typed
+(def %basic-started (fn (_ answers text) (%basic-typed-boot #t #t text answers)))
 
 (def %basic-typed-input (fn (_ text replies) (%basic-typed-on #t text replies)))
 
