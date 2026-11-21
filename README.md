@@ -42,7 +42,7 @@ The 6502 dialect (`basic/m6502.x`):
   `LET`, `GOTO`, `GOSUB`, `RETURN`, `IF ... THEN`, `IF ... GOTO`,
   `ON ... GOTO|GOSUB`, `FOR ... TO ... STEP`, `NEXT`, `DIM`, `DATA`,
   `READ`, `RESTORE`, `INPUT`, `END`, `STOP`, `CONT`, `REM`, `RUN`,
-  `LIST`, `NEW`, `CLEAR`.
+  `LIST`, `NEW`, `CLEAR`, and `DEF FN` with `FN` calls.
 - **Functions.** `SGN INT ABS LEN STR$ VAL ASC CHR$ LEFT$ RIGHT$ MID$
   POS`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
   `EXP(Y*LOG(X))`, step for step from the source's tables
@@ -50,7 +50,7 @@ The 6502 dialect (`basic/m6502.x`):
 - **Errors.** Two-letter, as the KIM build prints them:
   `?SN ERROR IN  20`.
 
-Not yet: `DEF FN`, `PEEK POKE USR WAIT FRE NULL GET LOAD SAVE`. A
+Not yet: `PEEK POKE USR WAIT FRE NULL GET LOAD SAVE`. A
 program run from a file (`x -l basic -f FILE`) or piped in waits on a
 line reader in x-lang.
 

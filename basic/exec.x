@@ -62,6 +62,8 @@
   (fn (_ m)
     (m set! (lit vars) (Dict make))
     (m set! (lit arrays) (Dict make))
+    ; DEF's functions, by name: (ARG . FORMULA)
+    (m set! (lit fns) (Dict make))
     (m set! (lit stack) ())
     (m set! (lit cont) ())
     (%bx-restore! m)))
@@ -293,6 +295,22 @@
             (do (m set! (lit rnd) (rest got)) (first got))))
         (#t (%bx-todo word))))))
 
+; FN NAME of the argument E (FNDOER): the argument taken, ?UF when NAME has
+; no DEF, then the formula read with its argument's variable set to it,
+; and the variable's value put back
+(def %bx-fn
+  (fn (_ m name e)
+    (when (%bx-string-name? name) (%bx-fail "TM"))
+    (let ((x (%bx-number (%bx-eval m e))) (d ((m get (lit fns)) get-or () name)))
+      (when (null? d) (%bx-fail "UF"))
+      (let ((var (first d)) (vars (m get (lit vars))))
+        (let ((old (vars get-or (%bx-default var) var)))
+          (%bx-set! m (list (lit var) var) x)
+          (let ((v (if (eq? (rest d) (lit bad)) (%bx-fail "SN")
+                     (%bx-number (%bx-eval m (rest d))))))
+            (vars set! var old)
+            v))))))
+
 (def %bx-eval
   (fn (_ m e)
     (let ((tag (first e)))
@@ -309,6 +327,7 @@
         ((eq? tag (lit not)) (mbf-int (int- -1 (%bx-word (%bx-eval m (List second e))))))
         ((eq? tag (lit call))
           (%bx-call m (List second e) (List map (fn (_ a) (%bx-eval m a)) (List third e))))
+        ((eq? tag (lit fn)) (%bx-fn m (List second e) (List third e)))
         (#t (%bx-fail "SN"))))))
 
 ; --- PRINT ----------------------------------------------------------------
@@ -489,6 +508,16 @@
               (List map (fn (_ e) (%bx-int-in (%bx-eval m e) 0 32767)) (rest d))))))
       decls)))
 
+; DEF FN NAME(ARG)=FORMULA: ?TM for a string name or argument, ?ID typed
+; at the prompt
+(def %bx-def
+  (fn (_ m st)
+    (let ((name (List second st)) (arg (List third st)))
+      (when (%bx-string-name? name) (%bx-fail "TM"))
+      (when (null? (m get (lit line))) (%bx-fail "ID"))
+      (when (%bx-string-name? arg) (%bx-fail "TM"))
+      ((m get (lit fns)) set! name (pair arg (List ref 3 st))))))
+
 ; A statement run for its effect, which goes on to the next
 (def %bx-effect
   (fn (_ m st tag)
@@ -502,6 +531,7 @@
       ((eq? tag (lit restore)) (%bx-restore! m))
       ((eq? tag (lit list)) (%bx-list m (List second st) (List third st)))
       ((eq? tag (lit clear)) (%bx-clear! m))
+      ((eq? tag (lit def)) (%bx-def m st))
       ((eq? tag (lit bad)) (%bx-fail (List second st)))
       (#t (%bx-todo (List second st))))))
 
