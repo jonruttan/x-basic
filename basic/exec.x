@@ -27,12 +27,15 @@
 (import x/type/err)
 (import x/core/doors int+ int- int* int/ int% int< int= int& int| str-byte-ref)
 (import basic/mbf
-  mbf-zero mbf-zero? mbf-int mbf-neg mbf-abs mbf-sgn mbf-cmp mbf-round mbf-add mbf-sub
+  mbf-zero mbf-zero? mbf-bytes mbf->bytes mbf-int mbf-neg mbf-abs mbf-sgn mbf-cmp mbf-round mbf-add mbf-sub
   mbf-mul mbf-div mbf-floor mbf->int mbf->str)
 (import basic/mbf-math
   mbf-log mbf-exp mbf-power mbf-sqr mbf-sin mbf-cos mbf-tan mbf-atn mbf-rnd-seed mbf-rnd)
-(import basic/lex basic-lex basic-fold)
+(import basic/lex basic-lex basic-fold basic-crunch)
 (import basic/parse basic-parse-line basic-parse-value basic-items)
+(import basic/mem
+  mem-peek mem-word mem-word! mem-write! mem-read mem-make mem-at mem-clear! mem-string!
+  mem-free mem-program! mem-var mem-var! mem-array mem-array-new! mem-element)
 
 (def %bx-fail (fn (_ code) (Err raise (lit basic) code)))
 (def %bx-todo (fn (_ word) (Err raise (lit basic-todo) word)))
@@ -55,34 +58,58 @@
       (m set! (lit nulls) 0)
       ; whether a typed line is upper-cased outside its strings, REM and DATA
       (m set! (lit fold-case) (dialect get-or #t (lit fold-case)))
+      ; the line's width and the column past which a comma starts a new
+      ; line (LINWID, NCMWID)
+      (%bx-width! m (dialect get (lit width))
+        (let ((zone (dialect get (lit zone))))
+          (int* (int- (int/ (dialect get (lit width)) zone) 1) zone)))
+      ; memory up to the dialect's top of RAM, as a blank MEMORY SIZE? finds
+      (m set! (lit mem) (mem-make (dialect get (lit txttab)) (dialect get (lit ram-top))))
       (m set! (lit lines) ())
       ; RND's last value; CLEAR and RUN leave it
       (m set! (lit rnd) mbf-rnd-seed)
-      (%bx-index! m)
+      (%bx-index! m ())
       (%bx-clear! m)
       m)))
+
+(def %bx-width!
+  (fn (_ m width last-comma)
+    (m set! (lit width) width)
+    (m set! (lit last-comma) last-comma)))
+
+(def %bx-mem (fn (_ m) (m get (lit mem))))
 
 ; Variables, arrays and the stack emptied, and DATA read from the start
 (def %bx-clear!
   (fn (_ m)
+    (mem-clear! (%bx-mem m))
+    ; the numbers of the simple variables and arrays, by name; the bytes
+    ; in memory are written as these are
     (m set! (lit vars) (Dict make))
+    ; where each simple variable's value is in memory, by name
+    (m set! (lit var-at) (Dict make))
     (m set! (lit arrays) (Dict make))
-    ; DEF's functions, by name: (ARG . FORMULA)
+    ; DEF's functions, by name: (ARG FORMULA INDEX), INDEX the DEF's line
     (m set! (lit fns) (Dict make))
     (m set! (lit stack) ())
     (m set! (lit cont) ())
     (%bx-restore! m)))
 
-; The program as a vector, and each line number's place in it
+; The program as a vector, each line number's place in it, and each line's
+; address in memory, ADDRS
 (def %bx-index!
-  (fn (_ m)
+  (fn (_ m addrs)
     (let ((v (Vector from-list (m get (lit lines)))) (at (Dict make)))
       (Vector for-each (fn (_ i) (at set! (first (Vector ref i v)) i))
         (Vector from-list (List range 0 (Vector length v))))
       (m set! (lit prog) v)
-      (m set! (lit at) at))))
+      (m set! (lit at) at)
+      (m set! (lit addrs) (Vector from-list addrs)))))
 
 (def %bx-line-ref (fn (_ m i) (Vector ref i (m get (lit prog)))))
+
+; Where the text of line INDEX starts in memory, past its link and number
+(def %bx-line-text (fn (_ m i) (int+ (Vector ref i (m get (lit addrs))) 4)))
 
 ; The place of line number N
 (def %bx-find
@@ -90,24 +117,34 @@
     (let ((i ((m get (lit at)) get n)))
       (if (null? i) (%bx-fail "US") i))))
 
-; Line N's text stored, or the line removed when TEXT is blank
+; The program LINES laid out in memory, then made the machine's: ?OM leaves
+; the program as it was
+(def %bx-program!
+  (fn (_ m lines)
+    (let ((addrs (mem-program! (%bx-mem m)
+                   (List map (fn (_ l) (pair (first l) (first (List ref 3 l)))) lines))))
+      (m set! (lit lines) lines)
+      (%bx-index! m addrs)
+      (%bx-clear! m))))
+
+; Line N's text stored, or the line removed when TEXT is blank.  A line is
+; (NUMBER TEXT STATEMENTS CRUNCHED), CRUNCHED as basic-crunch gives it.
 (def %bx-store!
   (fn (_ m n text)
-    (let ((kept (List filter (fn (_ l) (not (int= (first l) n))) (m get (lit lines)))))
-      (m set! (lit lines)
+    (let ((kept (List filter (fn (_ l) (not (int= (first l) n))) (m get (lit lines))))
+          (dialect (m get (lit dialect))))
+      (%bx-program! m
         (if (= (Str8 length (Str8 trim text)) 0) kept
-          (let ((line (list n text (basic-parse-line (basic-lex (m get (lit dialect)) text)))))
+          (let ((line (list n text (basic-parse-line (basic-lex dialect text)) (basic-crunch dialect text))))
             (List append (List filter (fn (_ l) (int< (first l) n)) kept)
-                         (pair line (List filter (fn (_ l) (int< n (first l))) kept)))))))
-    (%bx-index! m)
-    (%bx-clear! m)))
+                         (pair line (List filter (fn (_ l) (int< n (first l))) kept)))))))))
 
 ; --- output ---------------------------------------------------------------
 
 ; TEXT written, a new line begun wherever the line is full
 (def %bx-out
   (fn (_ m text)
-    (let ((width ((m get (lit dialect)) get (lit width))) (n (Str8 length text)))
+    (let ((width (m get (lit width))) (n (Str8 length text)))
       (let ((room (int- width (m get (lit col)))))
         (if (not (int< room n))
           (do ((m get (lit out)) text)
@@ -132,13 +169,57 @@
 
 ; --- values ---------------------------------------------------------------
 
+; A number is an MBF pair.  A string is its text when it has no place in
+; memory yet (a function's answer, a constant typed at the prompt, a reply
+; to INPUT), or #(TEXT ADDRESS VAR?) when it has one: in the program's text
+; or in string space, VAR? when it was read from a variable.
 (def %bx-num? (fn (_ v) (pair? v)))
 
 (def %bx-number
   (fn (_ v) (if (pair? v) v (%bx-fail "TM"))))
 
+(def %bx-placed (fn (_ text a var?) (Vector from-list (list text a var?))))
+
+; V's text, ?TM for a number
 (def %bx-string
-  (fn (_ v) (if (pair? v) (%bx-fail "TM") v)))
+  (fn (_ v)
+    (match
+      ((pair? v) (%bx-fail "TM"))
+      ((str? v) v)
+      (#t (Vector ref 0 v)))))
+
+; V checked to be a string, its place kept
+(def %bx-string-value
+  (fn (_ v) (do (%bx-string v) v)))
+
+; The string at the descriptor D in memory, read from it
+(def %bx-string-at
+  (fn (_ m d)
+    (let ((mem (%bx-mem m)))
+      (let ((n (mem-peek mem d)) (a (mem-word mem (int+ d 1))))
+        (%bx-placed (if (int= n 0) "" (bytes->str (mem-read mem a n))) a #t)))))
+
+; The string V put at the descriptor D (GETSPT and COPY): text with no
+; place is given space; a string read from a variable is copied when it is
+; in string space; one in the program's text is pointed at where it is
+(def %bx-string-to!
+  (fn (_ m d v)
+    (let ((mem (%bx-mem m)) (text (%bx-string v)))
+      (let ((n (Str8 length text)))
+        (let ((a (if (or (str? v)
+                         (and (Vector ref 2 v) (not (int< (Vector ref 1 v) (mem-at mem (lit fretop))))))
+                   (if (int= n 0) 0 (mem-string! mem (%bx-bytes text)))
+                   (Vector ref 1 v))))
+          (mem-word! mem (int+ d 1) a)
+          (%bx-poke-byte! m d n))))))
+
+(def %bx-poke-byte! (fn (_ m a b) (mem-write! (%bx-mem m) a (list b))))
+
+; TEXT's bytes, as a list
+(def %bx-bytes
+  (fn (_ text)
+    (let ((go (fn (self i acc) (if (int< i 0) acc (self (int- i 1) (pair (str-byte-ref text i) acc))))))
+      (go (int- (Str8 length text) 1) ()))))
 
 ; A number as an integer from LO to HI, by INT; ?FC outside
 (def %bx-int-in
@@ -161,33 +242,92 @@
 (def %bx-default
   (fn (_ name) (if (%bx-string-name? name) "" mbf-zero)))
 
-; V made fit to be stored in NAME
+; A number V made fit to be stored in NAME; a string is checked and keeps
+; its place
 (def %bx-fit
   (fn (_ name v)
     (match
-      ((%bx-string-name? name) (%bx-string v))
+      ((%bx-string-name? name) (%bx-string-value v))
       ((%bx-int-name? name) (mbf-int (%bx-word v)))
       (#t (mbf-round (%bx-number v))))))
 
 ; --- variables and arrays -------------------------------------------------
 
-; An array of NAME with the upper bounds BOUNDS: (BOUNDS . VECTOR)
-(def %bx-array-make
-  (fn (_ name bounds)
-    (let ((size (List fold (fn (_ n b) (int* n (int+ b 1))) 1 bounds)))
-      (pair bounds (Vector make size (%bx-default name))))))
+; NAME's two bytes in memory (PTRGET): the letters, the second 0 when there
+; is one; a string's second with its top bit on, an integer's both
+(def %bx-name-bytes
+  (fn (_ name)
+    (let ((base (if (or (%bx-string-name? name) (%bx-int-name? name))
+                  (Str8 sub 0 (int- (Str8 length name) 1) name) name)))
+      (let ((n1 (str-byte-ref base 0))
+            (n2 (if (int< 1 (Str8 length base)) (str-byte-ref base 1) 0)))
+        (match
+          ((%bx-string-name? name) (pair n1 (int| n2 128)))
+          ((%bx-int-name? name) (pair (int| n1 128) (int| n2 128)))
+          (#t (pair n1 n2)))))))
 
+; The bytes an element of NAME's array takes
+(def %bx-element-size
+  (fn (_ name)
+    (match ((%bx-string-name? name) 3) ((%bx-int-name? name) 2) (#t 5))))
+
+; The value bytes of the number V for NAME
+(def %bx-number-bytes
+  (fn (_ name v)
+    (if (%bx-int-name? name)
+      (let ((w (int& (mbf->int v 65536) 65535))) (list (int>> w 8) (int& w 255)))
+      (mbf->bytes v))))
+
+; Where NAME's value is in memory, or nil when it has no entry
+(def %bx-var-at
+  (fn (_ m name)
+    (let ((at (m get (lit var-at))))
+      (if (at has? name) (at get name)
+        (let ((nb (%bx-name-bytes name)))
+          (let ((e (mem-var (%bx-mem m) (first nb) (rest nb))))
+            (if (null? e) ()
+              (do (at set! name (int+ e 2)) (int+ e 2)))))))))
+
+; Where NAME's value is, its entry made when it has none
+(def %bx-var-at!
+  (fn (_ m name)
+    (let ((a (%bx-var-at m name)))
+      (if (not (null? a)) a
+        (let ((nb (%bx-name-bytes name)))
+          (let ((a (int+ (mem-var! (%bx-mem m) (first nb) (rest nb)) 2)))
+            ((m get (lit var-at)) set! name a)
+            a))))))
+
+; The number V stored in the simple variable NAME, its bytes written
+(def %bx-number-set!
+  (fn (_ m name v)
+    ((m get (lit vars)) set! name v)
+    (mem-write! (%bx-mem m) (%bx-var-at! m name) (%bx-number-bytes name v))))
+
+; An array of NAME, each subscript to BOUNDS: (BOUNDS HEADER NUMBERS),
+; NUMBERS its numbers' values by element, nil for strings
+(def %bx-array-make
+  (fn (_ m name bounds)
+    (let ((nb (%bx-name-bytes name)) (sizes (List map (fn (_ b) (int+ b 1)) bounds)))
+      (let ((a (mem-array-new! (%bx-mem m) (first nb) (rest nb) sizes (%bx-element-size name))))
+        (list bounds a
+              (if (%bx-string-name? name) ()
+                (Vector make (List fold (fn (_ n s) (int* n s)) 1 sizes) mbf-zero)))))))
+
+; NAME's array, made with COUNT subscripts of the dialect's size when it
+; has not been
 (def %bx-array
   (fn (_ m name count)
     (let ((arrays (m get (lit arrays))))
       (unless (arrays has? name)
         (arrays set! name
-          (%bx-array-make name
+          (%bx-array-make m name
             (List map (fn (_ i) (int- ((m get (lit dialect)) get (lit array-size)) 1))
                       (List range 0 count)))))
       (arrays get name))))
 
-; The slot of SUBSCRIPTS in the array A
+; The element of SUBSCRIPTS in the array A, counted with the first
+; subscript fastest (GETDEF)
 (def %bx-slot
   (fn (_ a subscripts)
     (unless (int= (List length subscripts) (List length (first a))) (%bx-fail "BS"))
@@ -196,25 +336,36 @@
         (let ((i (%bx-int-in (rest pr) 0 32767)))
           (when (int< (first pr) i) (%bx-fail "BS"))
           (int+ (int* at (int+ (first pr) 1)) i)))
-      0 (List zip (first a) subscripts))))
+      0 (List reverse (List zip (first a) subscripts)))))
 
 (def %bx-get
   (fn (_ m target)
     (let ((name (List second target)))
       (if (eq? (first target) (lit var))
-        ((m get (lit vars)) get-or (%bx-default name) name)
+        (if (%bx-string-name? name)
+          (let ((a (%bx-var-at m name))) (if (null? a) "" (%bx-string-at m a)))
+          ((m get (lit vars)) get-or mbf-zero name))
         (let ((args (List map (fn (_ e) (%bx-eval m e)) (List third target))))
           (let ((a (%bx-array m name (List length args))))
-            (Vector ref (%bx-slot a args) (rest a))))))))
+            (let ((k (%bx-slot a args)))
+              (if (%bx-string-name? name)
+                (%bx-string-at m (mem-element (%bx-mem m) (List second a) k 3))
+                (Vector ref k (List third a))))))))))
 
 (def %bx-set!
   (fn (_ m target v)
     (let ((name (List second target)))
       (if (eq? (first target) (lit var))
-        ((m get (lit vars)) set! name (%bx-fit name v))
+        (if (%bx-string-name? name)
+          (%bx-string-to! m (%bx-var-at! m name) (%bx-fit name v))
+          (%bx-number-set! m name (%bx-fit name v)))
         (let ((args (List map (fn (_ e) (%bx-eval m e)) (List third target))))
-          (let ((a (%bx-array m name (List length args))))
-            (Vector set! (%bx-slot a args) (%bx-fit name v) (rest a))))))))
+          (let ((a (%bx-array m name (List length args))) (fit (%bx-fit name v)))
+            (let ((k (%bx-slot a args)) (size (%bx-element-size name)))
+              (let ((at (mem-element (%bx-mem m) (List second a) k size)))
+                (if (%bx-string-name? name) (%bx-string-to! m at fit)
+                  (do (Vector set! k fit (List third a))
+                      (mem-write! (%bx-mem m) at (%bx-number-bytes name fit))))))))))))
 
 ; --- expressions ----------------------------------------------------------
 
@@ -226,7 +377,7 @@
   (fn (_ m word a b)
     (match
       ((str=? word "+")
-        (if (and (not (pair? a)) (not (pair? b))) (%bx-checked (Str8 append a b))
+        (if (and (not (pair? a)) (not (pair? b))) (%bx-checked (Str8 append (%bx-string a) (%bx-string b)))
           (mbf-add (mbf-round (%bx-number a)) (%bx-number b))))
       ((str=? word "-") (mbf-sub (mbf-round (%bx-number a)) (%bx-number b)))
       ((str=? word "*") (mbf-mul (%bx-number b) (%bx-number a)))
@@ -255,7 +406,7 @@
     (let ((c (match
                ((and (pair? a) (pair? b)) (mbf-cmp a b))
                ((or (pair? a) (pair? b)) (%bx-fail "TM"))
-               (#t (%bx-str-cmp a b)))))
+               (#t (%bx-str-cmp (%bx-string a) (%bx-string b))))))
       (%bx-truth (not (int= 0 (int& mask (match ((int< c 0) 1) ((int= c 0) 2) (#t 4)))))))))
 
 ; The number at the start of TEXT, as VAL and INPUT read it, or nil
@@ -277,7 +428,7 @@
         ((str=? word "VAL")
           (let ((got (%bx-value m (%bx-string a)))) (if (null? got) mbf-zero (first got))))
         ((str=? word "ASC")
-          (if (= (Str8 length (%bx-string a)) 0) (%bx-fail "FC") (mbf-int (str-byte-ref a 0))))
+          (if (= (Str8 length (%bx-string a)) 0) (%bx-fail "FC") (mbf-int (str-byte-ref (%bx-string a) 0))))
         ((str=? word "CHR$") (bytes->str (list (%bx-byte a))))
         ((str=? word "LEFT$")
           (let ((s (%bx-string a)) (n (%bx-byte (List second args))))
@@ -293,6 +444,10 @@
               (if (int< left 1) ""
                 (Str8 sub (int- i 1) (if (int< left n) left n) s)))))
         ((str=? word "POS") (mbf-int (m get (lit col))))
+        ; the strings collected, then FRETOP - STREND as a signed word
+        ((str=? word "FRE")
+          (do (unless (pair? a) (%bx-string a))
+              (mbf-int (%bx-signed (int& (mem-free (%bx-mem m)) 65535)))))
         ((str=? word "SQR") (mbf-sqr (%bx-number a)))
         ((str=? word "LOG") (mbf-log (%bx-number a)))
         ((str=? word "EXP") (mbf-exp (%bx-number a)))
@@ -311,22 +466,45 @@
 (def %bx-fn
   (fn (_ m name e)
     (when (%bx-string-name? name) (%bx-fail "TM"))
+    ; GETFNM finds the function's entry, or makes one, before the argument
+    (%bx-fn-at! m name)
     (let ((x (%bx-number (%bx-eval m e))) (d ((m get (lit fns)) get-or () name)))
       (when (null? d) (%bx-fail "UF"))
-      (let ((var (first d)) (vars (m get (lit vars))))
-        (let ((old (vars get-or (%bx-default var) var)))
+      (let ((var (first d)))
+        (let ((old ((m get (lit vars)) get-or mbf-zero var)))
           (%bx-set! m (list (lit var) var) x)
-          (let ((v (if (eq? (rest d) (lit bad)) (%bx-fail "SN")
-                     (%bx-number (%bx-eval m (rest d))))))
-            (vars set! var old)
+          (let ((v (if (eq? (List second d) (lit bad)) (%bx-fail "SN")
+                     (let ((here (m get (lit index))))
+                       ; the formula's string constants are in the DEF's line
+                       (m set! (lit index) (List third d))
+                       (let ((v (%bx-number (%bx-eval m (List second d)))))
+                         (m set! (lit index) here)
+                         v)))))
+            (%bx-number-set! m var old)
             v))))))
+
+; Where the function NAME's entry is, made when it has none: NAME1 has its
+; top bit on (GETFNM)
+(def %bx-fn-at!
+  (fn (_ m name)
+    (let ((nb (%bx-name-bytes name)))
+      (mem-var! (%bx-mem m) (int| (first nb) 128) (rest nb)))))
+
+; A string constant: in a line of the program, where it is in the line's
+; text; typed at the prompt, text that STRLIT copies when it is used
+(def %bx-constant
+  (fn (_ m e)
+    (let ((index (m get (lit index))) (ord (List third e)))
+      (if (or (null? index) (int< index 0) (null? ord)) (List second e)
+        (let ((strs (List second (List ref 3 (%bx-line-ref m index)))))
+          (%bx-placed (List second e) (int+ (%bx-line-text m index) (List ref ord strs)) #f))))))
 
 (def %bx-eval
   (fn (_ m e)
     (let ((tag (first e)))
       (match
         ((eq? tag (lit num)) (List second e))
-        ((eq? tag (lit str)) (List second e))
+        ((eq? tag (lit str)) (%bx-constant m e))
         ((eq? tag (lit var)) (%bx-get m e))
         ((eq? tag (lit elem)) (%bx-get m e))
         ((eq? tag (lit op))
@@ -351,16 +529,15 @@
             ((eq? tag (lit semi)) ())
             ((eq? tag (lit comma))
               (let ((zone ((m get (lit dialect)) get (lit zone)))
-                    (width ((m get (lit dialect)) get (lit width)))
                     (col (m get (lit col))))
-                (if (not (int< col (int* (int- (int/ width zone) 1) zone))) (%bx-newline m)
+                (if (not (int< col (m get (lit last-comma)))) (%bx-newline m)
                   (%bx-spaces m (int- zone (int% col zone))))))
             ((eq? tag (lit tab))
               (%bx-spaces m (int- (%bx-byte (%bx-eval m (List second item))) (m get (lit col)))))
             ((eq? tag (lit spc)) (%bx-spaces m (%bx-byte (%bx-eval m (List second item)))))
             (#t
               (let ((v (%bx-eval m (List second item))))
-                (if (pair? v) (%bx-out m (Str8 append (mbf->str v) " ")) (%bx-out m v)))))))
+                (if (pair? v) (%bx-out m (Str8 append (mbf->str v) " ")) (%bx-out m (%bx-string v))))))))
       items)
     (when (or (null? items)
               (not (List includes? (first (List last items)) (list (lit semi) (lit comma)))))
@@ -368,25 +545,30 @@
 
 ; --- DATA, READ and INPUT -------------------------------------------------
 
-; Every DATA item of the program, in order: (LINE-NUMBER . ITEM)
+; Every DATA item of the program, in order: (LINE-NUMBER ITEM . ADDRESS),
+; ADDRESS where READ finds the item in the line's text
 (def %bx-restore!
   (fn (_ m)
     (m set! (lit data)
       (List flat-map
-        (fn (_ line)
-          (List flat-map
-            (fn (_ st)
-              (if (eq? (first st) (lit data))
-                (List map (fn (_ item) (pair (first line) item)) (List second st))
-                ()))
-            (List third line)))
-        (m get (lit lines))))))
+        (fn (_ i)
+          (let ((line (%bx-line-ref m i)))
+            (let ((items (List flat-map
+                           (fn (_ st) (if (eq? (first st) (lit data)) (List second st) ()))
+                           (List third line)))
+                  (at (%bx-line-text m i)))
+              (List map
+                (fn (_ pr) (pair (first line) (pair (first pr) (int+ at (rest pr)))))
+                (List zip items (List third (List ref 3 line)))))))
+        (List range 0 (Vector length (m get (lit prog))))))))
 
 ; ITEM as a value for NAME: answers nil when a number was wanted and ITEM
-; is not one
+; is not one.  A string read from the program's DATA at AT is pointed at
+; there; one typed in answer, AT nil, has no place yet.
 (def %bx-item
-  (fn (_ m name item)
-    (if (%bx-string-name? name) (List second item)
+  (fn (_ m name item at)
+    (if (%bx-string-name? name)
+      (if (null? at) (List second item) (%bx-placed (List second item) at #f))
       (if (eq? (first item) (lit quoted)) ()
         (let ((text (Str8 trim (List second item))))
           (if (= (Str8 length text) 0) mbf-zero
@@ -400,7 +582,7 @@
         (let ((left (m get (lit data))))
           (when (null? left) (%bx-fail "OD"))
           (m set! (lit data) (rest left))
-          (let ((v (%bx-item m (List second target) (rest (first left)))))
+          (let ((v (%bx-item m (List second target) (List second (first left)) (rest (rest (first left))))))
             (when (null? v)
               (m set! (lit line) (first (first left)))
               (%bx-fail "SN"))
@@ -429,7 +611,7 @@
                         (if (or (null? more) (= (Str8 length more) 0)) (lit end)
                           (self targets (basic-items more)))))
                     (#t
-                      (let ((v (%bx-item m (List second (first targets)) (first items))))
+                      (let ((v (%bx-item m (List second (first targets)) (first items) ())))
                         (if (null? v) (lit redo)
                           (do (%bx-set! m (first targets) v)
                               (self (rest targets) (rest items))))))))))
@@ -484,7 +666,7 @@
         (let ((frame (first s)))
           (let ((var (List second frame)) (limit (List third frame)) (step (List ref 3 frame)))
             (let ((v (mbf-round (mbf-add ((m get (lit vars)) get-or mbf-zero var) step))))
-              ((m get (lit vars)) set! var v)
+              (%bx-number-set! m var v)
               (if (int= (mbf-cmp v limit) (mbf-sgn step))
                 (do (m set! (lit stack) (rest s)) ())
                 (do (m set! (lit stack) s) (List ref 4 frame))))))))))
@@ -514,19 +696,27 @@
         (let ((arrays (m get (lit arrays))))
           (when (arrays has? (first d)) (%bx-fail "DD"))
           (arrays set! (first d)
-            (%bx-array-make (first d)
+            (%bx-array-make m (first d)
               (List map (fn (_ e) (%bx-int-in (%bx-eval m e) 0 32767)) (rest d))))))
       decls)))
 
 ; DEF FN NAME(ARG)=FORMULA: ?TM for a string name or argument, ?ID typed
 ; at the prompt
+; at the prompt.  As DEF does: the function's entry found or made, then the
+; argument's, and the function's value bytes the formula's place in the
+; text (here the line's text) and the argument's value; the fifth, a byte DEF
+; pushes, is left zero.
 (def %bx-def
   (fn (_ m st)
     (let ((name (List second st)) (arg (List third st)))
-      (when (%bx-string-name? name) (%bx-fail "TM"))
-      (when (null? (m get (lit line))) (%bx-fail "ID"))
-      (when (%bx-string-name? arg) (%bx-fail "TM"))
-      ((m get (lit fns)) set! name (pair arg (List ref 3 st))))))
+      (let ((e (%bx-fn-at! m name)))
+        (when (%bx-string-name? name) (%bx-fail "TM"))
+        (when (null? (m get (lit line))) (%bx-fail "ID"))
+        (let ((a (%bx-var-at! m arg)))
+          (when (%bx-string-name? arg) (%bx-fail "TM"))
+          (mem-word! (%bx-mem m) (int+ e 2) (%bx-line-text m (m get (lit index))))
+          (mem-word! (%bx-mem m) (int+ e 4) a)
+          ((m get (lit fns)) set! name (list arg (List ref 3 st) (m get (lit index)))))))))
 
 ; NULL N: N zero bytes after each new line from now on.  GETBYT takes 0 to
 ; 255, and NULL refuses 239 and above as unreasonable.
@@ -535,12 +725,19 @@
     (let ((n (%bx-byte (%bx-eval m e))))
       (if (int< 238 n) (%bx-fail "FC") (m set! (lit nulls) n)))))
 
+; TARGET = E, as LET runs it: a simple variable's entry is found or made
+; before E is read
+(def %bx-let!
+  (fn (_ m target e)
+    (when (eq? (first target) (lit var)) (%bx-var-at! m (List second target)))
+    (%bx-set! m target (%bx-eval m e))))
+
 ; A statement run for its effect, which goes on to the next
 (def %bx-effect
   (fn (_ m st tag)
     (match
       ((eq? tag (lit print)) (%bx-print m (List second st)))
-      ((eq? tag (lit let)) (%bx-set! m (List second st) (%bx-eval m (List third st))))
+      ((eq? tag (lit let)) (%bx-let! m (List second st) (List third st)))
       ((eq? tag (lit rem)) ())
       ((eq? tag (lit data)) ())
       ((eq? tag (lit dim)) (%bx-dim m (List second st)))
@@ -562,7 +759,7 @@
   (fn (_ m st index after)
     (let ((name (List second st)))
       (do
-        (%bx-set! m (list (lit var) name) (%bx-eval m (List third st)))
+        (%bx-let! m (list (lit var) name) (List third st))
         (let ((limit (mbf-round (%bx-number (%bx-eval m (List ref 3 st)))))
               (step (if (null? (List ref 4 st)) (mbf-int 1)
                       (mbf-round (%bx-number (%bx-eval m (List ref 4 st)))))))
@@ -589,9 +786,7 @@
 
 (def %bx-new
   (fn (_ m)
-    (do (m set! (lit lines) ())
-        (%bx-index! m)
-        (%bx-clear! m)
+    (do (%bx-program! m ())
         (lit end))))
 
 (def %bx-cont
@@ -654,6 +849,7 @@
                     (if (null? sts) (self (%bx-after-line m index))
                       (do
                         (%bx-sweep m)
+                        (m set! (lit index) index)
                         (m set! (lit line) (if (int< index 0) () (first (%bx-line-ref m index))))
                         (let ((r (%bx-statement m (first sts) index (rest sts))))
                           (match
@@ -683,23 +879,41 @@
   (fn (_ m text)
     (m set! (lit direct) (basic-parse-line (basic-lex (m get (lit dialect)) text)))
     (m set! (lit line) ())
-    (let ((r (guard (e (if (or (eq? (Err label e) (lit basic)) (eq? (Err label e) (lit basic-todo)))
-                         e (error e)))
-               (%bx-run m (pair -1 (m get (lit direct)))))))
+    (let ((r (%bx-guarded (fn (_) (%bx-run m (pair -1 (m get (lit direct))))))))
       (match
         ((eq? r (lit stop))
           (do (%bx-newline m)
               (%bx-out m (Str8 append "BREAK" (%bx-where m)))))
         ((eq? r (lit end)) ())
-        (#t
-          (do (m set! (lit stack) ())
-              (m set! (lit cont) ())
-              (%bx-newline m)
-              (%bx-out m
-                (if (eq? (Err label r) (lit basic))
-                  (Str8 append "?" (Err text r) " ERROR" (%bx-where m))
-                  (Str8 append "?" (Err text r) " IS NOT IN X-BASIC YET" (%bx-where m))))))))
+        (#t (%bx-report m r))))
     (%bx-ready m)))
+
+; What THUNK answers, or the BASIC error it raises
+(def %bx-guarded
+  (fn (_ thunk)
+    (guard (e (if (or (eq? (Err label e) (lit basic)) (eq? (Err label e) (lit basic-todo)))
+                e (error e)))
+      (thunk))))
+
+; The error R printed, the stack emptied
+(def %bx-report
+  (fn (_ m r)
+    (m set! (lit stack) ())
+    (m set! (lit cont) ())
+    (%bx-newline m)
+    (%bx-out m
+      (if (eq? (Err label r) (lit basic))
+        (Str8 append "?" (Err text r) " ERROR" (%bx-where m))
+        (Str8 append "?" (Err text r) " IS NOT IN X-BASIC YET" (%bx-where m))))))
+
+; Line N stored; ?OM when it does not fit, and the ready prompt after it
+(def %bx-stored
+  (fn (_ m n text)
+    (m set! (lit line) ())
+    (let ((r (%bx-guarded (fn (_) (do (%bx-store! m n text) ())))))
+      (unless (null? r)
+        (%bx-report m r)
+        (%bx-ready m)))))
 
 ; A line stored when it starts with a line number, else run.  The digits
 ; and the blanks after them are the number, as LINGET reads them.
@@ -719,9 +933,83 @@
                           (#t (pair k i))))))
               (let ((got (go start 0)))
                 (if (int< (first got) 64000)
-                  (%bx-store! m (first got) (Str8 sub (rest got) (int- n (rest got)) text))
+                  (%bx-stored m (first got) (Str8 sub (rest got) (int- n (rest got)) text))
                   (%bx-direct m text))))
             (%bx-direct m text)))))))
+
+; --- starting up ----------------------------------------------------------
+
+; The number LINGET reads from TEXT, blanks anywhere, with nothing after it:
+; nil when TEXT is not one or it passes 63999
+(def %bx-linget
+  (fn (_ text)
+    (let ((n (Str8 length text)))
+      (let ((go (fn (self i k digits)
+                  (match
+                    ((not (int< i n)) (if digits k ()))
+                    ((int= (str-byte-ref text i) 32) (self (int+ i 1) k digits))
+                    ((and (not (int< (str-byte-ref text i) 48)) (not (int< 57 (str-byte-ref text i))))
+                      (let ((k (int+ (int* k 10) (int- (str-byte-ref text i) 48))))
+                        (if (int< 63999 k) () (self (int+ i 1) k #t))))
+                    (#t ())))))
+        (go 0 0 #f)))))
+
+; Whether TEXT is blank, as the first CHRGET finds it
+(def %bx-blank? (fn (_ text) (or (null? text) (= (Str8 length (Str8 trim text)) 0))))
+
+; The machine started as the dialect's does (INIT): MEMORY SIZE? (blank
+; for all the RAM the dialect has) and WIDTH? (blank for its width), each
+; asked again until it is answered with a number it takes, then the bytes
+; free and the dialect's banner.  basic-boot-prompt is the question the
+; machine is waiting on, nil once it has started; basic-boot-answer! takes
+; the line typed in answer.
+(def basic-boot-prompt
+  (fn (_ m)
+    (let ((dialect (m get (lit dialect))))
+      (match
+        ((eq? (m get (lit boot)) (lit memory)) (Str8 append (dialect get (lit memory-prompt)) "? "))
+        ((eq? (m get (lit boot)) (lit width)) (Str8 append (dialect get (lit width-prompt)) "? "))
+        (#t ())))))
+
+(def basic-boot-answer!
+  (fn (_ m reply)
+    (%bx-nulls m)
+    (let ((dialect (m get (lit dialect))) (start ((m get (lit dialect)) get (lit txttab))))
+      (if (eq? (m get (lit boot)) (lit memory))
+        (let ((k (if (%bx-blank? reply) (dialect get (lit ram-top)) (%bx-linget reply))))
+          (unless (or (null? k) (not (int< (int+ start 2) k)))
+            (m set! (lit mem) (mem-make start k))
+            (m set! (lit boot) (lit width))))
+        (let ((k (if (%bx-blank? reply) (m get (lit width)) (%bx-linget reply))))
+          (unless (or (null? k) (int< k 16) (int< 255 k))
+            (unless (%bx-blank? reply) (%bx-width! m k (int- k (int% k (dialect get (lit zone))))))
+            (m set! (lit boot) ())
+            (%bx-clear! m)
+            (%bx-newline m)
+            (%bx-out m (Str8 append (mbf->str (mbf-int (int- (mem-at (%bx-mem m) (lit memsiz)) start)))
+                                    " BYTES FREE"))
+            (%bx-newline m)
+            (%bx-newline m)
+            (List for-each (fn (_ line) (%bx-out m line) (%bx-newline m)) (dialect get (lit banner)))
+            (%bx-ready m)))))))
+
+; The machine started, its questions asked and answered with IN's lines
+(def basic-boot
+  (fn (_ m)
+    (m set! (lit boot) (lit memory))
+    (%bx-newline m)
+    (let ((go (fn (self)
+                (let ((prompt (basic-boot-prompt m)))
+                  (unless (null? prompt)
+                    (%bx-out m prompt)
+                    (basic-boot-answer! m ((m get (lit in))))
+                    (self))))))
+      (go))))
+
+; The machine made to wait on its start-up questions: the lines typed
+; until it has started answer basic-boot-prompt
+(def basic-boot-begin!
+  (fn (_ m) (do (m set! (lit boot) (lit memory)) ())))
 
 ; A line typed, upper-cased outside its strings, REM and DATA when the
 ; machine folds case.  The terminal has shown its new line; the zero bytes
@@ -731,4 +1019,5 @@
     (%bx-nulls m)
     (%bx-typed m (if (m get (lit fold-case)) (basic-fold (m get (lit dialect)) text) text))))
 
-(provide basic/exec basic-machine basic-type)
+(provide basic/exec basic-machine basic-boot basic-boot-begin! basic-boot-prompt basic-boot-answer!
+  basic-type)

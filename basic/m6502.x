@@ -36,6 +36,15 @@
       (lit array-size) 11
       (lit name-length) 2
       ; names and reserved words read in either case, as later BASICs do
-      (lit fold-case) #t)))
+      (lit fold-case) #t
+      ; the program from RAMLOC + 1 ($4001), a zero before it; a blank
+      ; MEMORY SIZE? finds RAM to $C000 here, 32K past RAMLOC
+      (lit txttab) 16385
+      (lit ram-top) 49152
+      ; INIT's questions and what it prints after the bytes free (KIMROM:
+      ; WIDTH, not TERMINAL WIDTH, and no WANT SIN-COS-TAN-ATN)
+      (lit memory-prompt) "MEMORY SIZE"
+      (lit width-prompt) "WIDTH"
+      (lit banner) (list "KIM BASIC V1.1" "COPYRIGHT 1978 MICROSOFT"))))
 
 (provide basic/m6502 m6502-dialect)

@@ -59,4 +59,4 @@ reserved words: wherever their bytes are, inside a name or not.
 (%seq (write (%basic-tokens "PRINT \"HI")) (newline))
 ```
 ---
-    (('kw "PRINT") ('str "\"HI"))
+    (('kw "PRINT") ('str "\"HI" 0))

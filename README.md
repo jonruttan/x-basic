@@ -44,13 +44,22 @@ The 6502 dialect (`basic/m6502.x`):
   `READ`, `RESTORE`, `INPUT`, `END`, `STOP`, `CONT`, `REM`, `RUN`,
   `LIST`, `NEW`, `CLEAR`, `NULL`, and `DEF FN` with `FN` calls.
 - **Functions.** `SGN INT ABS LEN STR$ VAL ASC CHR$ LEFT$ RIGHT$ MID$
-  POS`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
+  POS FRE`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
   `EXP(Y*LOG(X))`, step for step from the source's tables
   (`basic/mbf-math.x`).
+- **Start-up.** `MEMORY SIZE?` and `WIDTH?`, as the KIM build's INIT
+  asks them: a blank size takes RAM to $C000, a blank width keeps 72
+  columns, and an answer that does not read is asked again. Then the
+  bytes free and the banner.
+- **Memory.** A 64K byte image laid out as the 6502 lays it out
+  (`basic/mem.x`): the crunched program from $4001, simple variables of
+  seven bytes, arrays, and strings given space down from the top and
+  collected as GARBA2 collects them. `FRE` is exact; `?OM` when the
+  space runs out.
 - **Errors.** Two-letter, as the KIM build prints them:
   `?SN ERROR IN  20`.
 
-Not yet: `PEEK POKE USR WAIT FRE GET LOAD SAVE`. A
+Not yet: `PEEK POKE USR WAIT GET LOAD SAVE`. A
 program run from a file (`x -l basic -f FILE`) or piped in waits on a
 line reader in x-lang.
 
