@@ -42,9 +42,9 @@ The 6502 dialect (`lib/basic/m6502.x`):
   `LET`, `GOTO`, `GOSUB`, `RETURN`, `IF ... THEN`, `IF ... GOTO`,
   `ON ... GOTO|GOSUB`, `FOR ... TO ... STEP`, `NEXT`, `DIM`, `DATA`,
   `READ`, `RESTORE`, `INPUT`, `END`, `STOP`, `CONT`, `REM`, `RUN`,
-  `LIST`, `NEW`, `CLEAR`, `NULL`, and `DEF FN` with `FN` calls.
+  `LIST`, `NEW`, `CLEAR`, `NULL`, `POKE`, and `DEF FN` with `FN` calls.
 - **Functions.** `SGN INT ABS LEN STR$ VAL ASC CHR$ LEFT$ RIGHT$ MID$
-  POS FRE`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
+  POS FRE PEEK`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
   `EXP(Y*LOG(X))`, step for step from the source's tables
   (`lib/basic/mbf-math.x`).
 - **Start-up.** `MEMORY SIZE?` and `WIDTH?`, as the KIM build's INIT
@@ -55,11 +55,14 @@ The 6502 dialect (`lib/basic/m6502.x`):
   (`lib/basic/mem.x`): the crunched program from $4001, simple variables of
   seven bytes, arrays, and strings given space down from the top and
   collected as GARBA2 collects them. `FRE` is exact; `?OM` when the
-  space runs out.
+  space runs out. `PEEK` and `POKE` read and write the image, and a
+  variable's value is kept only there. The program runs from its parsed
+  lines, so a `POKE` into its text is not seen by `RUN` or `LIST`, and
+  the interpreter's pointers and the ROM are not in the image.
 - **Errors.** Two-letter, as the KIM build prints them:
   `?SN ERROR IN  20`.
 
-Not yet: `PEEK POKE USR WAIT GET LOAD SAVE`. A
+Not yet: `USR WAIT GET LOAD SAVE`. A
 program run from a file (`x -l basic -f FILE`) or piped in waits on a
 line reader in x-lang.
 

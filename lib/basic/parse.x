@@ -492,6 +492,10 @@
                 ((str=? word "NULL")
                   (let ((got (basic-parse-expr ts)))
                     (pair (list (list (lit null) (first got))) (rest got))))
+                ((str=? word "POKE")
+                  (let ((a (basic-parse-expr ts)))
+                    (let ((b (basic-parse-expr (%bp-expect-c (rest a) ","))))
+                      (pair (list (list (lit poke) (first a) (first b))) (rest b)))))
                 (#t (pair (list (list (lit todo) word)) ()))))))))))
 
 ; A line's tokens as its statements.  Parsing stops at the first statement

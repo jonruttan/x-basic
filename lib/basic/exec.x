@@ -25,7 +25,7 @@
 (import x/type/dict)
 (import x/type/vector)
 (import x/type/err)
-(import x/core/doors int+ int- int* int/ int% int< int= int& int| str-byte-ref)
+(import x/core/doors int+ int- int* int/ int% int< int= int<< int>> int& int| str-byte-ref)
 (import basic/mbf
   mbf-zero mbf-zero? mbf-bytes mbf->bytes mbf-int mbf-neg mbf-abs mbf-sgn mbf-cmp mbf-round mbf-add mbf-sub
   mbf-mul mbf-div mbf-floor mbf->int mbf->str)
@@ -34,7 +34,7 @@
 (import basic/lex basic-lex basic-fold basic-crunch)
 (import basic/parse basic-parse-line basic-parse-value basic-items)
 (import basic/mem
-  mem-peek mem-word mem-word! mem-write! mem-read mem-make mem-at mem-clear! mem-string!
+  mem-peek mem-poke! mem-word mem-word! mem-write! mem-read mem-make mem-at mem-clear! mem-string!
   mem-free mem-program! mem-var mem-var! mem-array mem-array-new! mem-element)
 
 (def %bx-fail (fn (_ code) (Err raise (lit basic) code)))
@@ -83,11 +83,10 @@
 (def %bx-clear!
   (fn (_ m)
     (mem-clear! (%bx-mem m))
-    ; the numbers of the simple variables and arrays, by name; the bytes
-    ; in memory are written as these are
-    (m set! (lit vars) (Dict make))
-    ; where each simple variable's value is in memory, by name
+    ; where each simple variable's value is in memory, by name; the value
+    ; itself is only in memory, so a POKE into it is read back
     (m set! (lit var-at) (Dict make))
+    ; each array by name: (BOUNDS OFFSET), OFFSET its header's from ARYTAB
     (m set! (lit arrays) (Dict make))
     ; DEF's functions, by name: (ARG FORMULA INDEX), INDEX the DEF's line
     (m set! (lit fns) (Dict make))
@@ -228,6 +227,8 @@
       (if (or (int< n lo) (int< hi n)) (%bx-fail "FC") n))))
 
 (def %bx-byte (fn (_ v) (%bx-int-in v 0 255)))
+; An address, as GETADR takes one: ?FC below 0 or past 65535
+(def %bx-address (fn (_ v) (%bx-int-in v 0 65535)))
 (def %bx-word (fn (_ v) (%bx-int-in v -32768 32767)))
 
 (def %bx-truth (fn (_ b) (if b (mbf-int -1) mbf-zero)))
@@ -301,18 +302,37 @@
 ; The number V stored in the simple variable NAME, its bytes written
 (def %bx-number-set!
   (fn (_ m name v)
-    ((m get (lit vars)) set! name v)
     (mem-write! (%bx-mem m) (%bx-var-at! m name) (%bx-number-bytes name v))))
 
-; An array of NAME, each subscript to BOUNDS: (BOUNDS HEADER NUMBERS),
-; NUMBERS its numbers' values by element, nil for strings
+; The number for NAME in the bytes at A: an integer's word hi then lo, a
+; real's five bytes as MOVFM loads them
+(def %bx-number-at
+  (fn (_ m name a)
+    (let ((mem (%bx-mem m)))
+      (if (%bx-int-name? name)
+        (mbf-int (%bx-signed (int+ (int<< (mem-peek mem a) 8) (mem-peek mem (int+ a 1)))))
+        (mbf-bytes (mem-peek mem a) (mem-peek mem (int+ a 1)) (mem-peek mem (int+ a 2))
+                   (mem-peek mem (int+ a 3)) (mem-peek mem (int+ a 4)))))))
+
+; The simple variable NAME's number, zero when it has no entry (ISVAR
+; makes none)
+(def %bx-number-of
+  (fn (_ m name)
+    (let ((a (%bx-var-at m name))) (if (null? a) mbf-zero (%bx-number-at m name a)))))
+
+; An array of NAME, each subscript to BOUNDS: (BOUNDS OFFSET), OFFSET its
+; header's from ARYTAB, which a new simple variable moves but not that
 (def %bx-array-make
   (fn (_ m name bounds)
     (let ((nb (%bx-name-bytes name)) (sizes (List map (fn (_ b) (int+ b 1)) bounds)))
       (let ((a (mem-array-new! (%bx-mem m) (first nb) (rest nb) sizes (%bx-element-size name))))
-        (list bounds a
-              (if (%bx-string-name? name) ()
-                (Vector make (List fold (fn (_ n s) (int* n s)) 1 sizes) mbf-zero)))))))
+        (list bounds (int- a (mem-at (%bx-mem m) (lit arytab))))))))
+
+; Where the element K of NAME's array A is
+(def %bx-element-at
+  (fn (_ m name a k)
+    (let ((mem (%bx-mem m)))
+      (mem-element mem (int+ (mem-at mem (lit arytab)) (List second a)) k (%bx-element-size name)))))
 
 ; NAME's array, made with COUNT subscripts of the dialect's size when it
 ; has not been
@@ -344,13 +364,11 @@
       (if (eq? (first target) (lit var))
         (if (%bx-string-name? name)
           (let ((a (%bx-var-at m name))) (if (null? a) "" (%bx-string-at m a)))
-          ((m get (lit vars)) get-or mbf-zero name))
+          (%bx-number-of m name))
         (let ((args (List map (fn (_ e) (%bx-eval m e)) (List third target))))
           (let ((a (%bx-array m name (List length args))))
-            (let ((k (%bx-slot a args)))
-              (if (%bx-string-name? name)
-                (%bx-string-at m (mem-element (%bx-mem m) (List second a) k 3))
-                (Vector ref k (List third a))))))))))
+            (let ((at (%bx-element-at m name a (%bx-slot a args))))
+              (if (%bx-string-name? name) (%bx-string-at m at) (%bx-number-at m name at)))))))))
 
 (def %bx-set!
   (fn (_ m target v)
@@ -361,11 +379,9 @@
           (%bx-number-set! m name (%bx-fit name v)))
         (let ((args (List map (fn (_ e) (%bx-eval m e)) (List third target))))
           (let ((a (%bx-array m name (List length args))) (fit (%bx-fit name v)))
-            (let ((k (%bx-slot a args)) (size (%bx-element-size name)))
-              (let ((at (mem-element (%bx-mem m) (List second a) k size)))
-                (if (%bx-string-name? name) (%bx-string-to! m at fit)
-                  (do (Vector set! k fit (List third a))
-                      (mem-write! (%bx-mem m) at (%bx-number-bytes name fit))))))))))))
+            (let ((at (%bx-element-at m name a (%bx-slot a args))))
+              (if (%bx-string-name? name) (%bx-string-to! m at fit)
+                (mem-write! (%bx-mem m) at (%bx-number-bytes name fit))))))))))
 
 ; --- expressions ----------------------------------------------------------
 
@@ -448,6 +464,7 @@
         ((str=? word "FRE")
           (do (unless (pair? a) (%bx-string a))
               (mbf-int (%bx-signed (int& (mem-free (%bx-mem m)) 65535)))))
+        ((str=? word "PEEK") (mbf-int (mem-peek (%bx-mem m) (%bx-address a))))
         ((str=? word "SQR") (mbf-sqr (%bx-number a)))
         ((str=? word "LOG") (mbf-log (%bx-number a)))
         ((str=? word "EXP") (mbf-exp (%bx-number a)))
@@ -471,7 +488,7 @@
     (let ((x (%bx-number (%bx-eval m e))) (d ((m get (lit fns)) get-or () name)))
       (when (null? d) (%bx-fail "UF"))
       (let ((var (first d)))
-        (let ((old ((m get (lit vars)) get-or mbf-zero var)))
+        (let ((old (%bx-number-of m var)))
           (%bx-set! m (list (lit var) var) x)
           (let ((v (if (eq? (List second d) (lit bad)) (%bx-fail "SN")
                      (let ((here (m get (lit index))))
@@ -665,7 +682,7 @@
       (let ((s (go (m get (lit stack)))))
         (let ((frame (first s)))
           (let ((var (List second frame)) (limit (List third frame)) (step (List ref 3 frame)))
-            (let ((v (mbf-round (mbf-add ((m get (lit vars)) get-or mbf-zero var) step))))
+            (let ((v (mbf-round (mbf-add (%bx-number-of m var) step))))
               (%bx-number-set! m var v)
               (if (int= (mbf-cmp v limit) (mbf-sgn step))
                 (do (m set! (lit stack) (rest s)) ())
@@ -725,6 +742,12 @@
     (let ((n (%bx-byte (%bx-eval m e))))
       (if (int< 238 n) (%bx-fail "FC") (m set! (lit nulls) n)))))
 
+; POKE A,B: the address taken and checked before the byte (GETNUM)
+(def %bx-poke
+  (fn (_ m a b)
+    (let ((at (%bx-address (%bx-eval m a))))
+      (mem-poke! (%bx-mem m) at (%bx-byte (%bx-eval m b))))))
+
 ; TARGET = E, as LET runs it: a simple variable's entry is found or made
 ; before E is read
 (def %bx-let!
@@ -747,6 +770,7 @@
       ((eq? tag (lit clear)) (%bx-clear! m))
       ((eq? tag (lit def)) (%bx-def m st))
       ((eq? tag (lit null)) (%bx-null m (List second st)))
+      ((eq? tag (lit poke)) (%bx-poke m (List second st) (List third st)))
       ((eq? tag (lit bad)) (%bx-fail (List second st)))
       (#t (%bx-todo (List second st))))))
 
