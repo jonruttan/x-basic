@@ -1,4 +1,4 @@
-FRE and the memory behind it (`basic/mem.x`): the program crunched from
+FRE and the memory behind it (`lib/basic/mem.x`): the program crunched from
 $4001, simple variables of 7 bytes after it, then arrays, and strings given
 space down from the top.  FRE collects the strings and answers FRETOP -
 STREND as a signed word.  The machine starts by asking MEMORY SIZE? and

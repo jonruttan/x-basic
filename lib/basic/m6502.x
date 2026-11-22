@@ -1,6 +1,6 @@
 ; # x-basic -- BASIC on x-lang
 ;
-; ## basic/m6502.x -- Microsoft 6502 BASIC 1.1, the KIM-1 build
+; ## lib/basic/m6502.x -- Microsoft 6502 BASIC 1.1, the KIM-1 build
 ;
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan

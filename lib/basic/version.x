@@ -1,6 +1,6 @@
 ; # x-basic -- BASIC on x-lang
 ;
-; ## basic/version.x -- the bundle's version
+; ## lib/basic/version.x -- the bundle's version
 ;
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan

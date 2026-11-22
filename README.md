@@ -18,10 +18,10 @@ follow, each a module beside it.
 
 ## Status
 
-Pre-release: no release has been cut. Paired with x-lang v0.59.0
-(`lang.xon` is the checkable row).
+Pre-release: no release has been cut. Paired with x-lang v0.60.0
+(`bundle.xon` is the checkable row).
 
-The 6502 dialect (`basic/m6502.x`):
+The 6502 dialect (`lib/basic/m6502.x`):
 
 - **Lines.** A numbered line is stored and any other runs at once, then
   `OK`. Entering or deleting a line clears the variables. Reserved words
@@ -33,7 +33,7 @@ The 6502 dialect (`basic/m6502.x`):
   LIST shows capitals. `X_BASIC_FOLD_CASE=0` (or `no`, `off`, `false`)
   reads lines as typed, where only capitals are reserved words, as on
   the 6502.
-- **Numbers.** The five-byte format, built of integers (`basic/mbf.x`):
+- **Numbers.** The five-byte format, built of integers (`lib/basic/mbf.x`):
   a value is the floating accumulator, four mantissa bytes and the
   guard byte, rounded only where the 6502 rounds, its multiply's lost
   bit included. `?OV` past 2^127, nine digits printed, fixed notation
@@ -46,13 +46,13 @@ The 6502 dialect (`basic/m6502.x`):
 - **Functions.** `SGN INT ABS LEN STR$ VAL ASC CHR$ LEFT$ RIGHT$ MID$
   POS FRE`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
   `EXP(Y*LOG(X))`, step for step from the source's tables
-  (`basic/mbf-math.x`).
+  (`lib/basic/mbf-math.x`).
 - **Start-up.** `MEMORY SIZE?` and `WIDTH?`, as the KIM build's INIT
   asks them: a blank size takes RAM to $C000, a blank width keeps 72
   columns, and an answer that does not read is asked again. Then the
   bytes free and the banner.
 - **Memory.** A 64K byte image laid out as the 6502 lays it out
-  (`basic/mem.x`): the crunched program from $4001, simple variables of
+  (`lib/basic/mem.x`): the crunched program from $4001, simple variables of
   seven bytes, arrays, and strings given space down from the top and
   collected as GARBA2 collects them. `FRE` is exact; `?OM` when the
   space runs out.
@@ -65,7 +65,7 @@ line reader in x-lang.
 
 ## Install
 
-    make install        # into <share>/langs/basic
+    make install        # into <share>/bundles/basic
     make check          # the suite, against tests/contract/known-failures.txt
 
 ## Licence

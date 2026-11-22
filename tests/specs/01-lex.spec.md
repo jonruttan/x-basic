@@ -1,4 +1,4 @@
-A line's text to tokens (`basic/lex.x`), as Microsoft's CRUNCH finds the
+A line's text to tokens (`lib/basic/lex.x`), as Microsoft's CRUNCH finds the
 reserved words: wherever their bytes are, inside a name or not.
 
 ## lex words

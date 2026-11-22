@@ -1,4 +1,4 @@
-NULL (`basic/exec.x`) as the 6502's NULL and CRDO run it: NULL N sets how
+NULL (`lib/basic/exec.x`) as the 6502's NULL and CRDO run it: NULL N sets how
 many zero bytes follow each new line the machine prints, for a teletype's
 carriage to come back.  The new line after a typed line is the machine's
 too (INLIN ends with CRDO), so its zero bytes come before what the line

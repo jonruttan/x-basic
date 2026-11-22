@@ -1,4 +1,4 @@
-Case folding (`basic/lex.x`, `basic-fold`): a typed line is upper-cased
+Case folding (`lib/basic/lex.x`, `basic-fold`): a typed line is upper-cased
 before it is stored or run, all but its strings, the remark after REM and
 the items after DATA.  Reserved words and names then read in either case,
 and LIST shows them in capitals.  A machine's `fold-case` turns it off; the

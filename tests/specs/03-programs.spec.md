@@ -1,4 +1,4 @@
-Lines typed at the prompt (`basic/exec.x`): a numbered line is stored and
+Lines typed at the prompt (`lib/basic/exec.x`): a numbered line is stored and
 prints nothing; any other runs at once and is followed by OK.
 
 ## program lines

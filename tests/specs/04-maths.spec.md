@@ -1,4 +1,4 @@
-The maths functions as the 6502 computes them (`basic/mbf-math.x`): its
+The maths functions as the 6502 computes them (`lib/basic/mbf-math.x`): its
 polynomial tables and constants, step for step.  The expected values are
 what Commodore's BASIC 2, built from the same routines and tables, prints.
 
