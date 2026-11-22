@@ -1,4 +1,4 @@
-PEEK and POKE on the machine's 64K bytes (`basic/mem.x`).  A variable's
+PEEK and POKE on the machine's 64K bytes (`lib/basic/mem.x`).  A variable's
 value is kept only in those bytes, so a POKE into it is what reads back.
 The bytes below are what Commodore's BASIC 2 shows in VICE for the same
 lines, its variables from 2051 where the KIM's are from 16387.
