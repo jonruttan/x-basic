@@ -1,6 +1,6 @@
 ; # x-basic -- BASIC on x-lang
 ;
-; ## basic/mbf-math.x -- the 6502's maths functions
+; ## lib/basic/mbf-math.x -- the 6502's maths functions
 ;
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan

@@ -1,6 +1,6 @@
 ; # x-basic -- BASIC on x-lang
 ;
-; ## basic/exec.x -- the machine: the program, its variables, and running it
+; ## lib/basic/exec.x -- the machine: the program, its variables, and running it
 ;
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan

@@ -1,6 +1,6 @@
 ; # x-basic -- BASIC on x-lang
 ;
-; ## basic/mbf.x -- Microsoft binary format numbers
+; ## lib/basic/mbf.x -- Microsoft binary format numbers
 ;
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan

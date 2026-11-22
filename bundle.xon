@@ -1,0 +1,12 @@
+; bundle.xon -- what this bundle is.
+
+(name "basic")
+
+; Helium: a BASIC's numbers are its own formats, made of integers (basic/mbf),
+; and nothing here needs a socket or a process.
+(dialect he)
+
+(requires-release "v0.60.0")
+
+; `x -l basic` boots the module basic/run.
+(entry run)
