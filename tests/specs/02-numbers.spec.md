@@ -1,5 +1,5 @@
 Numbers as the 6502's five-byte format holds and prints them
-(`basic/mbf.x`): nine digits, fixed notation from .01 to 999999999.
+(`lib/basic/mbf.x`): nine digits, fixed notation from .01 to 999999999.
 
 ## print numbers
 

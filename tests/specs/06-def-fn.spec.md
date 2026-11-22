@@ -1,4 +1,4 @@
-DEF FN and FN (`basic/parse.x`, `basic/exec.x`) as the 6502's DEF and
+DEF FN and FN (`lib/basic/parse.x`, `lib/basic/exec.x`) as the 6502's DEF and
 FNDOER run them: a function of one numeric argument, its formula read at
 each call with the argument's variable set to the argument and then put
 back.  DEF skips its formula as DATA is skipped, so a formula's error is

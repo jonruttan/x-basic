@@ -1,6 +1,6 @@
 ; # x-basic -- BASIC on x-lang
 ;
-; ## basic/mem.x -- the 6502's memory: program, variables, arrays, strings
+; ## lib/basic/mem.x -- the 6502's memory: program, variables, arrays, strings
 ;
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan
