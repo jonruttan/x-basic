@@ -182,4 +182,17 @@
                           (List reverse (out get (lit strs)))
                           (List reverse (out get (lit datas))))))))))))))
 
-(provide basic/lex basic-lex basic-fold basic-crunch)
+; The text of crunched BYTES, each token its reserved word, as LIST prints
+; it; a byte past the dialect's tokens is kept
+(def basic-detokenize
+  (fn (_ dialect bytes)
+    (let ((words (dialect get (lit words))))
+      (let ((count (List length words)))
+        (Str8 join ""
+          (List map
+            (fn (_ b)
+              (if (or (int< b 128) (not (int< (int- b 128) count))) (bytes->str (list b))
+                (List ref (int- b 128) words)))
+            bytes))))))
+
+(provide basic/lex basic-lex basic-fold basic-crunch basic-detokenize)

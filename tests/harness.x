@@ -11,13 +11,48 @@
 (import x/type/list)
 (import x/type/str)
 (import x/type/dict)
-(import x/core/doors str-byte-ref)
+(import x/sys/file)
+(import x/core/doors int+ int< int= str-byte-ref str-byte-len str-make)
 (import basic/m6502 m6502-dialect)
 (import basic/lex basic-lex)
 (import basic/mbf mbf-int mbf-div mbf-mul mbf-add mbf->str mbf-bytes)
 (import basic/exec basic-machine basic-boot basic-type)
 (import basic/repl basic-fold-case-setting)
 (import basic/term basic-term-out basic-term-zeros)
+
+; The tape the machines SAVE to and LOAD from: a file in the temporary
+; directory named for this process, so suites running at once keep apart
+(def %basic-tape
+  (Str8 append (let ((t (Sys getenv "TMPDIR"))) (if (str? t) t "/tmp")) "/x-basic-"
+    (Str8 trim (mbf->str (mbf-int (Sys getpid)))) ".tape"))
+
+; The tape removed, when it is there
+(def %basic-tape-remove!
+  (fn (_) (when (File exists? %basic-tape) (File unlink %basic-tape))))
+
+; TEXT written as the tape
+(def %basic-tape-write!
+  (fn (_ text)
+    (let ((fd (File open %basic-tape (list 'wronly 'creat 'trunc))))
+      (File write fd text (str-byte-len text))
+      (File close fd))))
+
+(def %basic-tape-size 4096)
+
+; The tape's text, its first bytes read, the SYN run before the * counted
+; as "N SYN " and each EOT shown as <EOT>
+(def %basic-tape-shown
+  (fn (_)
+    (let ((fd (File open %basic-tape 'rdonly)) (buf (str-make %basic-tape-size)))
+      (let ((n (File read fd buf %basic-tape-size)))
+        (File close fd)
+        (let ((syn (let ((go (fn (self i) (if (and (int< i n) (int= (str-byte-ref buf i) 22)) (self (int+ i 1)) i))))
+                     (go 0))))
+          (Str8 append (Str8 trim (mbf->str (mbf-int syn))) " SYN "
+            (Str8 join ""
+              (List map
+                (fn (_ i) (let ((b (str-byte-ref buf i))) (if (int= b 4) "<EOT>" (bytes->str (list b)))))
+                (List range syn n)))))))))
 
 ; TEXT's lines typed into a new 6502 machine, shown as a terminal shows
 ; them: each typed line, then what it printed.  REPLIES are the lines typed
@@ -44,6 +79,7 @@
                            (first k)))))))
         (let ((m (basic-machine m6502-dialect basic-term-out basic-term-zeros in key)))
           (m set! (lit fold-case) fold)
+          (m set! (lit tape) %basic-tape)
           (when boot (basic-boot m))
           (List for-each
             (fn (_ line) (basic-term-out line) (basic-term-out "\n") (basic-type m line))

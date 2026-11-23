@@ -42,8 +42,8 @@ The 6502 dialect (`lib/basic/m6502.x`):
   `LET`, `GOTO`, `GOSUB`, `RETURN`, `IF ... THEN`, `IF ... GOTO`,
   `ON ... GOTO|GOSUB`, `FOR ... TO ... STEP`, `NEXT`, `DIM`, `DATA`,
   `READ`, `RESTORE`, `INPUT`, `END`, `STOP`, `CONT`, `REM`, `RUN`,
-  `LIST`, `NEW`, `CLEAR`, `NULL`, `POKE`, `WAIT`, `GET`, and `DEF FN` with
-  `FN` calls. `GET` waits for a key, which the terminal shows, as a
+  `LIST`, `NEW`, `CLEAR`, `NULL`, `POKE`, `WAIT`, `GET`, `SAVE`, `LOAD`,
+  and `DEF FN` with `FN` calls. `GET` waits for a key, which the terminal shows, as a
   KIM's does. A `WAIT` that does not hold at once waits for ever: only
   the program writes the memory it watches.
 - **Functions.** `SGN INT ABS LEN STR$ VAL ASC CHR$ LEFT$ RIGHT$ MID$
@@ -62,10 +62,18 @@ The 6502 dialect (`lib/basic/m6502.x`):
   variable's value is kept only there. The program runs from its parsed
   lines, so a `POKE` into its text is not seen by `RUN` or `LIST`, and
   the interpreter's pointers and the ROM are not in the image.
+- **Tape.** `SAVE` and `LOAD` use a file holding what the KIM-1 monitor
+  writes to cassette (`lib/basic/tape.x`): 100 SYN, `*`, the ID, the start
+  address and the data as hex digit pairs, `/`, the checksum, two EOT.
+  The file is `X_BASIC_TAPE`, or `basic.tape` in the current directory.
+  `LOAD` takes the first record whatever its ID, puts it at $4001, says
+  `LOADED` and reads the next line with no `OK`, as the KIM build does. A
+  tape that cannot be read or written shows `FFFF`, the monitor's error
+  display, and the program is kept.
 - **Errors.** Two-letter, as the KIM build prints them:
   `?SN ERROR IN  20`.
 
-Not yet: `USR LOAD SAVE`. A
+Not yet: `USR`. A
 program run from a file (`x -l basic -f FILE`) or piped in waits on a
 line reader in x-lang.
 

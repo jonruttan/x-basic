@@ -450,7 +450,7 @@
 (def %bp-bare
   (list (pair "END" (lit end)) (pair "STOP" (lit stop)) (pair "RETURN" (lit return))
         (pair "RESTORE" (lit restore)) (pair "NEW" (lit new)) (pair "CLEAR" (lit clear))
-        (pair "CONT" (lit cont))))
+        (pair "CONT" (lit cont)) (pair "SAVE" (lit save)) (pair "LOAD" (lit load))))
 
 ; One statement at TS: (STATEMENTS . TS-LEFT)
 (def %bp-statement

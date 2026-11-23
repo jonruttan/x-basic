@@ -31,7 +31,8 @@
   mbf-mul mbf-div mbf-floor mbf->int mbf->str)
 (import basic/mbf-math
   mbf-log mbf-exp mbf-power mbf-sqr mbf-sin mbf-cos mbf-tan mbf-atn mbf-rnd-seed mbf-rnd)
-(import basic/lex basic-lex basic-fold basic-crunch)
+(import basic/lex basic-lex basic-fold basic-crunch basic-detokenize)
+(import basic/tape tape-save tape-load)
 (import basic/parse basic-parse-line basic-parse-value basic-items)
 (import basic/mem
   mem-peek mem-poke! mem-word mem-word! mem-write! mem-read mem-make mem-at mem-clear! mem-string!
@@ -71,6 +72,8 @@
       (m set! (lit lines) ())
       ; RND's last value; CLEAR and RUN leave it
       (m set! (lit rnd) mbf-rnd-seed)
+      ; the file SAVE writes a cassette record to and LOAD reads one from
+      (m set! (lit tape) "basic.tape")
       (%bx-index! m ())
       (%bx-clear! m)
       m)))
@@ -129,15 +132,20 @@
       (%bx-index! m addrs)
       (%bx-clear! m))))
 
-; Line N's text stored, or the line removed when TEXT is blank.  A line is
-; (NUMBER TEXT STATEMENTS CRUNCHED), CRUNCHED as basic-crunch gives it.
+; Line N of TEXT in DIALECT: (NUMBER TEXT STATEMENTS CRUNCHED), CRUNCHED as
+; basic-crunch gives it
+(def %bx-line
+  (fn (_ dialect n text)
+    (list n text (basic-parse-line (basic-lex dialect text)) (basic-crunch dialect text))))
+
+; Line N's text stored, or the line removed when TEXT is blank
 (def %bx-store!
   (fn (_ m n text)
     (let ((kept (List filter (fn (_ l) (not (int= (first l) n))) (m get (lit lines))))
           (dialect (m get (lit dialect))))
       (%bx-program! m
         (if (= (Str8 length (Str8 trim text)) 0) kept
-          (let ((line (list n text (basic-parse-line (basic-lex dialect text)) (basic-crunch dialect text))))
+          (let ((line (%bx-line dialect n text)))
             (List append (List filter (fn (_ l) (int< (first l) n)) kept)
                          (pair line (List filter (fn (_ l) (int< n (first l))) kept)))))))))
 
@@ -860,6 +868,51 @@
     (do (%bx-program! m ())
         (lit end))))
 
+; A tape the monitor could not read or write: the KIM's display shows FFFF
+; and BASIC is left, so the run ends
+(def %bx-tape-error
+  (fn (_ m) (do (%bx-out m "FFFF") (lit end))))
+
+; The program, TXTTAB up to VARTAB, written to the tape with ID $FE, as
+; KIM BASIC's SAVE has DUMPT do; a running program goes on
+(def %bx-save
+  (fn (_ m)
+    (let ((mem (%bx-mem m)) (start ((m get (lit dialect)) get (lit txttab))))
+      (if (tape-save (m get (lit tape)) 254 start (mem-read mem start (int- (mem-at mem (lit vartab)) start)))
+        (do (%bx-out m "SAVED") (%bx-newline m) ())
+        (%bx-tape-error m)))))
+
+; The lines of program BYTES, as LNKPRG walks them to a link whose high
+; byte is zero, each line's text its tokens spelled out
+(def %bx-tape-lines
+  (fn (_ m bytes)
+    (let ((dialect (m get (lit dialect))))
+      ; (TEXT . AFTER): the bytes up to a zero, and those past it
+      (let ((upto (fn (self bs acc)
+                    (match
+                      ((null? bs) (pair (List reverse acc) ()))
+                      ((int= (first bs) 0) (pair (List reverse acc) (rest bs)))
+                      (#t (self (rest bs) (pair (first bs) acc)))))))
+        (let ((go (fn (self bs acc)
+                    (if (or (int< (List length bs) 4) (int= (List second bs) 0)) (List reverse acc)
+                      (let ((cut (upto (List drop 4 bs) ())))
+                        (let ((text (basic-detokenize dialect (first cut))))
+                          (self (rest cut)
+                            (pair (%bx-line dialect (int+ (List third bs) (int* 256 (List ref 3 bs))) text)
+                                  acc))))))))
+          (go bytes ()))))))
+
+; The first record on the tape made the program at TXTTAB, as KIM BASIC's
+; LOAD has LOADT do with $FF at ID: "LOADED", then the program relinked and
+; its variables cleared, and the next line read with no ready prompt
+(def %bx-load
+  (fn (_ m)
+    (let ((got (tape-load (m get (lit tape)))))
+      (if (null? got) (%bx-tape-error m)
+        (do (%bx-program! m (%bx-tape-lines m (first got)))
+            (%bx-out m "LOADED")
+            (lit loaded))))))
+
 (def %bx-cont
   (fn (_ m index)
     (let ((at (m get (lit cont))))
@@ -888,6 +941,8 @@
           (if (int< index 0) (%bx-fail "ID") (%bx-get-keys m (List second st))))
         ((eq? tag (lit run)) (%bx-run-statement m st))
         ((eq? tag (lit new)) (%bx-new m))
+        ((eq? tag (lit save)) (%bx-save m))
+        ((eq? tag (lit load)) (%bx-load m))
         ((eq? tag (lit cont)) (%bx-cont m index))
         (#t (do (%bx-effect m st tag) ()))))))
 
@@ -913,7 +968,8 @@
       (if (int< n %bx-sweep-every) (m set! (lit steps) n)
         (do (m set! (lit steps) 0) (Heap collect))))))
 
-; Run from POS to an END, a STOP or the program's end: answers end or stop
+; Run from POS to an END, a STOP or the program's end: answers end or stop,
+; or loaded after a LOAD
 (def %bx-run
   (fn (_ m pos)
     (let ((go (fn (self pos)
@@ -928,6 +984,7 @@
                           (match
                             ((null? r) (self (pair index (rest sts))))
                             ((eq? r (lit next-line)) (self (%bx-after-line m index)))
+                            ((eq? r (lit loaded)) r)
                             ((or (eq? r (lit end)) (eq? r (lit stop)))
                               (do (m set! (lit cont) (pair index (rest sts))) r))
                             (#t (self r)))))))))))
@@ -958,8 +1015,10 @@
           (do (%bx-newline m)
               (%bx-out m (Str8 append "BREAK" (%bx-where m)))))
         ((eq? r (lit end)) ())
-        (#t (%bx-report m r))))
-    (%bx-ready m)))
+        ((eq? r (lit loaded)) ())
+        (#t (%bx-report m r)))
+      ; LOAD goes on to MAIN, the next line read with no ready prompt
+      (unless (eq? r (lit loaded)) (%bx-ready m)))))
 
 ; What THUNK answers, or the BASIC error it raises
 (def %bx-guarded
