@@ -17,6 +17,7 @@
 (import x/core/doors int=)
 (import x/repl/line)
 (import x/repl/lang)
+(import x/repl/term)
 (import basic/m6502 m6502-dialect)
 (import basic/exec basic-machine basic-boot-begin! basic-boot-prompt basic-boot-answer! basic-type)
 (import basic/term basic-term-out basic-term-zeros)
@@ -30,6 +31,17 @@
     (let ((line (Line read "")))
       (if (or (eq? line (lit eof)) (eq? line (lit cancel))) () line))))
 
+; A key read for GET: the terminal raw so the key comes without Enter, its
+; signal keys still signalling, then put back; the key shown, as a KIM's
+; terminal shows it; nil at the end of input
+(def %basic-key
+  (fn (_)
+    (let ((saved (Term raw-with-signals! 0)))
+      (let ((b (Sys fd-read 0 1)))
+        (Term restore! 0 saved)
+        (if (null? b) ()
+          (do (basic-term-out (bytes->str (list (first b)))) (first b)))))))
+
 ; Whether a session folds case, given X_BASIC_FOLD_CASE's VALUE: DEFAULT
 ; when it is unset or empty, no for 0, no, off or false in any case, and
 ; yes for anything else
@@ -41,7 +53,7 @@
 (def %basic-machine
   (fn (_)
     (unless (%basic-session has? (lit m))
-      (let ((m (basic-machine m6502-dialect basic-term-out basic-term-zeros %basic-reply)))
+      (let ((m (basic-machine m6502-dialect basic-term-out basic-term-zeros %basic-reply %basic-key)))
         (m set! (lit fold-case)
           (basic-fold-case-setting (Sys getenv "X_BASIC_FOLD_CASE") (m get (lit fold-case))))
         (basic-boot-begin! m)

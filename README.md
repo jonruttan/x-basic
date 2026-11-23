@@ -42,7 +42,10 @@ The 6502 dialect (`lib/basic/m6502.x`):
   `LET`, `GOTO`, `GOSUB`, `RETURN`, `IF ... THEN`, `IF ... GOTO`,
   `ON ... GOTO|GOSUB`, `FOR ... TO ... STEP`, `NEXT`, `DIM`, `DATA`,
   `READ`, `RESTORE`, `INPUT`, `END`, `STOP`, `CONT`, `REM`, `RUN`,
-  `LIST`, `NEW`, `CLEAR`, `NULL`, `POKE`, and `DEF FN` with `FN` calls.
+  `LIST`, `NEW`, `CLEAR`, `NULL`, `POKE`, `WAIT`, `GET`, and `DEF FN` with
+  `FN` calls. `GET` waits for a key, which the terminal shows, as a
+  KIM's does. A `WAIT` that does not hold at once waits for ever: only
+  the program writes the memory it watches.
 - **Functions.** `SGN INT ABS LEN STR$ VAL ASC CHR$ LEFT$ RIGHT$ MID$
   POS FRE PEEK`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
   `EXP(Y*LOG(X))`, step for step from the source's tables
@@ -62,7 +65,7 @@ The 6502 dialect (`lib/basic/m6502.x`):
 - **Errors.** Two-letter, as the KIM build prints them:
   `?SN ERROR IN  20`.
 
-Not yet: `USR WAIT GET LOAD SAVE`. A
+Not yet: `USR LOAD SAVE`. A
 program run from a file (`x -l basic -f FILE`) or piped in waits on a
 line reader in x-lang.
 

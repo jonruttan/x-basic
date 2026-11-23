@@ -43,15 +43,18 @@
 ; --- the machine ----------------------------------------------------------
 
 ; A machine for DIALECT, writing text with OUT and N zero bytes with
-; (ZEROS N), and reading lines with IN (a function answering the next line,
-; or nil at the end)
+; (ZEROS N), reading lines with IN (a function answering the next line, or
+; nil at the end) and keys with KEY (one answering the next key's byte,
+; waited for, or nil at the end; the terminal shows the key, as a KIM's
+; does, and the machine's column does not count it)
 (def basic-machine
-  (fn (_ dialect out zeros in)
+  (fn (_ dialect out zeros in key)
     (let ((m (Dict make)))
       (m set! (lit dialect) dialect)
       (m set! (lit out) out)
       (m set! (lit zeros) zeros)
       (m set! (lit in) in)
+      (m set! (lit key) key)
       (m set! (lit col) 0)
       ; NULL's count, the zero bytes after each new line; NEW and CLEAR
       ; leave it
@@ -748,6 +751,49 @@
     (let ((at (%bx-address (%bx-eval m a))))
       (mem-poke! (%bx-mem m) at (%bx-byte (%bx-eval m b))))))
 
+; WAIT A,M1[,M2]: until the byte at A, with M2's bits flipped, has one of
+; M1's bits on (FNWAIT).  Only the program writes this memory, so a WAIT
+; that does not hold at once waits for ever, as a KIM's does on an address
+; nothing drives.
+(def %bx-wait
+  (fn (_ m a m1 m2)
+    (let ((at (%bx-address (%bx-eval m a))))
+      (let ((and-mask (%bx-byte (%bx-eval m m1))))
+        (let ((eor-mask (if (null? m2) 0 (%bx-byte (%bx-eval m m2)))))
+          (let ((go (fn (self)
+                      (let ((b (mem-peek (%bx-mem m) at)))
+                        (when (int= 0 (int& (int- (int| b eor-mask) (int& b eor-mask)) and-mask))
+                          (self))))))
+            (go)))))))
+
+; The number a key GET takes reads as, as FIN reads it: a digit is its
+; value; a blank, . + - E , or : is zero; any other key is ?SN, reported
+; as at the prompt, since TRMNOK makes the line look typed there
+(def %bx-key-number
+  (fn (_ m k)
+    (match
+      ((and (not (int< k 48)) (int< k 58)) (mbf-int (int- k 48)))
+      ((List includes? k (list 32 43 44 45 46 58 69)) mbf-zero)
+      (#t (do (m set! (lit line) ()) (%bx-fail "SN"))))))
+
+; GET V, ...: a key for each variable, waited for.  A string takes the key
+; as it is; a number reads it (%bx-key-number), and a , or : left by the
+; last one is ?EXTRA IGNORED, as VAREND finds it.  End of input ends the
+; run, as an empty reply to INPUT does.
+(def %bx-get-keys
+  (fn (_ m targets)
+    (let ((go (fn (self ts extra)
+                (if (null? ts)
+                  (do (when extra (%bx-out m "?EXTRA IGNORED") (%bx-newline m)) ())
+                  (let ((k ((m get (lit key)))))
+                    (if (null? k) (lit end)
+                      (if (%bx-string-name? (List second (first ts)))
+                        (do (%bx-set! m (first ts) (bytes->str (list k)))
+                            (self (rest ts) #f))
+                        (do (%bx-set! m (first ts) (%bx-key-number m k))
+                            (self (rest ts) (or (int= k 44) (int= k 58)))))))))))
+      (go targets #f))))
+
 ; TARGET = E, as LET runs it: a simple variable's entry is found or made
 ; before E is read
 (def %bx-let!
@@ -771,6 +817,7 @@
       ((eq? tag (lit def)) (%bx-def m st))
       ((eq? tag (lit null)) (%bx-null m (List second st)))
       ((eq? tag (lit poke)) (%bx-poke m (List second st) (List third st)))
+      ((eq? tag (lit wait)) (%bx-wait m (List second st) (List third st) (List ref 3 st)))
       ((eq? tag (lit bad)) (%bx-fail (List second st)))
       (#t (%bx-todo (List second st))))))
 
@@ -837,6 +884,8 @@
         ((eq? tag (lit on)) (%bx-on m st index after))
         ((eq? tag (lit input))
           (if (int< index 0) (%bx-fail "ID") (%bx-input m (List second st) (List third st))))
+        ((eq? tag (lit get))
+          (if (int< index 0) (%bx-fail "ID") (%bx-get-keys m (List second st))))
         ((eq? tag (lit run)) (%bx-run-statement m st))
         ((eq? tag (lit new)) (%bx-new m))
         ((eq? tag (lit cont)) (%bx-cont m index))
