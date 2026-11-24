@@ -19,6 +19,9 @@
 (import basic/m6502 m6502-dialect)
 (import basic/lex basic-lex)
 (import basic/mbf mbf-int mbf-div mbf-mul mbf-add mbf->str mbf-bytes)
+(import basic/mbf86
+  m86-read m86->str m86-add m86-sub m86-mul m86-div m86-idiv m86-mod m86->bytes m86->single m86->double
+  m86-cint m86-floor m86-neg)
 (import basic/exec basic-machine basic-boot basic-type)
 (import basic/repl basic-fold-case-setting)
 (import basic/term basic-term-out basic-term-zeros)
@@ -125,3 +128,16 @@
 
 ; TEXT's tokens in the 6502 dialect
 (def %basic-tokens (fn (_ text) (basic-lex m6502-dialect text)))
+
+; --- the 8086 BASIC's numbers --------------------------------------------
+
+; Each of TEXTS read as GW-BASIC reads a number, then printed as it prints
+; one
+(def %gw-numbers
+  (fn (_ texts) (List map (fn (_ t) (m86->str (first (m86-read t 0)))) texts)))
+
+; The number TEXT reads as
+(def %gw-read (fn (_ text) (first (m86-read text 0))))
+
+; The number OP makes of the numbers A and B read, printed
+(def %gw-op (fn (_ op a b) (m86->str (op (%gw-read a) (%gw-read b)))))
