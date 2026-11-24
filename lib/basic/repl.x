@@ -19,6 +19,7 @@
 (import x/repl/lang)
 (import x/repl/term)
 (import basic/m6502 m6502-dialect)
+(import basic/gwbasic gwbasic-dialect)
 (import basic/exec basic-machine basic-boot-begin! basic-boot-prompt basic-boot-answer! basic-type)
 (import basic/term basic-term-out basic-term-zeros)
 
@@ -50,10 +51,21 @@
     (if (or (not (str? value)) (int= (Str8 length value) 0)) default
       (not (List includes? (Str8 downcase value) (list "0" "no" "off" "false"))))))
 
+; The dialects by the names X_BASIC_DIALECT takes
+(def %basic-dialects (list (pair "m6502" m6502-dialect) (pair "gw" gwbasic-dialect)))
+
+; The session's dialect: X_BASIC_DIALECT's, the KIM's when it is unset or
+; names none of them
+(def %basic-dialect
+  (fn (_)
+    (let ((name (Sys getenv "X_BASIC_DIALECT")))
+      (let ((hit (if (str? name) (List find (fn (_ p) (str=? (first p) (Str8 downcase name))) %basic-dialects) ())))
+        (if (null? hit) m6502-dialect (rest hit))))))
+
 (def %basic-machine
   (fn (_)
     (unless (%basic-session has? (lit m))
-      (let ((m (basic-machine m6502-dialect basic-term-out basic-term-zeros %basic-reply %basic-key)))
+      (let ((m (basic-machine (%basic-dialect) basic-term-out basic-term-zeros %basic-reply %basic-key)))
         (m set! (lit fold-case)
           (basic-fold-case-setting (Sys getenv "X_BASIC_FOLD_CASE") (m get (lit fold-case))))
         ; the tape file SAVE and LOAD use, X_BASIC_TAPE when it is set
@@ -86,9 +98,18 @@
             (pair (lit %repl-complete) ())
             (pair (lit %repl-eval-line) basic-eval-line)))))
 
-; The first prompt is the dialect's first start-up question
+; The first prompt is the dialect's first start-up question, none for a
+; dialect that asks nothing
 (def basic-repl-register!
-  (fn (_) (%basic-register! (Str8 append (m6502-dialect get (lit memory-prompt)) "? "))))
+  (fn (_)
+    (let ((d (%basic-dialect)))
+      (%basic-register!
+        (if (d has? (lit memory-prompt)) (Str8 append (d get (lit memory-prompt)) "? ") ())))))
+
+; The machine made at once when its dialect asks nothing at start-up, so its
+; banner is the first thing the session prints
+(def basic-repl-start!
+  (fn (_) (unless ((%basic-dialect) has? (lit memory-prompt)) (%basic-machine))))
 
 ; Whether this lang owns the session: the wrapper names the first -l in
 ; %lang-lead, and a bundle named by a later one is loaded beside it.  A
@@ -99,4 +120,4 @@
 (def basic-leads?
   (fn (_) (guard (_ #t) (str=? %lang-lead "basic"))))
 
-(provide basic/repl basic-eval-line basic-repl-register! basic-leads? basic-fold-case-setting)
+(provide basic/repl basic-eval-line basic-repl-register! basic-repl-start! basic-leads? basic-fold-case-setting)

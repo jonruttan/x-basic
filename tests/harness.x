@@ -17,6 +17,7 @@
 (import x/type/err)
 (import basic/cpu cpu-make cpu-call!)
 (import basic/m6502 m6502-dialect)
+(import basic/gwbasic gwbasic-dialect)
 (import basic/lex basic-lex)
 (import basic/mbf mbf-int mbf-div mbf-mul mbf-add mbf->str mbf-bytes)
 (import basic/mbf86
@@ -60,14 +61,14 @@
                 (fn (_ i) (let ((b (str-byte-ref buf i))) (if (int= b 4) "<EOT>" (bytes->str (list b)))))
                 (List range syn n)))))))))
 
-; TEXT's lines typed into a new 6502 machine, shown as a terminal shows
+; TEXT's lines typed into a new DIALECT machine, shown as a terminal shows
 ; them: each typed line, then what it printed.  REPLIES are the lines typed
 ; in answer to INPUT, shown as they are read.  FOLD is the machine's
 ; fold-case; BOOT, whether the machine is started first, REPLIES then
 ; answering its questions.  KEYS are the keys GET reads, each shown as it
 ; is read.
 (def %basic-typed-boot
-  (fn (_ boot fold text replies keys)
+  (fn (_ dialect boot fold text replies keys)
     (let ((left (Dict make)))
       (left set! (lit replies) replies)
       (left set! (lit keys) (List map (fn (_ i) (str-byte-ref keys i)) (List range 0 (Str8 length keys))))
@@ -83,7 +84,7 @@
                        (do (left set! (lit keys) (rest k))
                            (basic-term-out (bytes->str (list (first k))))
                            (first k)))))))
-        (let ((m (basic-machine m6502-dialect basic-term-out basic-term-zeros in key)))
+        (let ((m (basic-machine dialect basic-term-out basic-term-zeros in key)))
           (m set! (lit fold-case) fold)
           (m set! (lit tape) %basic-tape)
           (when boot (basic-boot m))
@@ -91,17 +92,26 @@
             (fn (_ line) (basic-term-out line) (basic-term-out "\n") (basic-type m line))
             (Str8 split "\n" text)))))))
 
-(def %basic-typed-on (fn (_ fold text replies) (%basic-typed-boot #f fold text replies "")))
+(def %basic-typed-on (fn (_ fold text replies) (%basic-typed-boot m6502-dialect #f fold text replies "")))
 
 ; TEXT typed into a new machine, KEYS pressed for its GETs
-(def %basic-typed-keys (fn (_ text keys) (%basic-typed-boot #f #t text () keys)))
+(def %basic-typed-keys (fn (_ text keys) (%basic-typed-boot m6502-dialect #f #t text () keys)))
 
 ; A machine started with ANSWERS to its start-up questions, then TEXT typed
-(def %basic-started (fn (_ answers text) (%basic-typed-boot #t #t text answers "")))
+(def %basic-started (fn (_ answers text) (%basic-typed-boot m6502-dialect #t #t text answers "")))
 
 (def %basic-typed-input (fn (_ text replies) (%basic-typed-on #t text replies)))
 
 (def %basic-typed (fn (_ text) (%basic-typed-on #t text ())))
+
+; TEXT typed into a new GW-BASIC machine, REPLIES its INPUT's; started
+; first, its banner printed, with %gw-started
+(def %gw-typed-input (fn (_ text replies) (%basic-typed-boot gwbasic-dialect #f #t text replies "")))
+(def %gw-typed (fn (_ text) (%gw-typed-input text ())))
+(def %gw-started (fn (_ text) (%basic-typed-boot gwbasic-dialect #t #t text () "")))
+
+; TEXT's tokens in GW-BASIC
+(def %gw-tokens (fn (_ text) (basic-lex gwbasic-dialect text)))
 
 ; TEXT typed into a machine that reads it as typed, its case kept
 (def %basic-typed-cased (fn (_ text) (%basic-typed-on #f text ())))

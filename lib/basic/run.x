@@ -17,7 +17,7 @@
 
 (module basic/run)
 (import basic/version basic-version)
-(import basic/repl basic-leads? basic-repl-register!)
+(import basic/repl basic-leads? basic-repl-register! basic-repl-start!)
 
 (basic-repl-register!)
 
@@ -25,7 +25,8 @@
 (when (basic-leads?)
   (set! %lang-name "BASIC")
   (set! %lang-version basic-version)
-  (Lang use! "basic"))
+  (Lang use! "basic")
+  (basic-repl-start!))
 
 ; The prompt is all there is: a program from -f or piped in waits on a line
 ; reader in x-lang, so main has nothing to start.

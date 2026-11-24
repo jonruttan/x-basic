@@ -25,7 +25,8 @@
 (module basic/mbf)
 (import x/type/list)
 (import x/type/err)
-(import x/core/doors int+ int- int* int/ int% int< int= int<< int>> int&)
+(import x/type/str)
+(import x/core/doors int+ int- int* int/ int% int< int= int<< int>> int& str-byte-ref)
 
 ; The accumulator's width, and the guard bits at its bottom
 (def %mbf-bits 40)
@@ -358,6 +359,31 @@
                     (#t n)))))
         (go acc (int- exp point))))))
 
+; The number at I in TEXT, as FIN reads a constant with the blanks gone:
+; digits, a point and digits, then E, a sign and digits, only the first
+; three of those counted.  (NUMBER . END), or nil when no digit or point is
+; at I.
+(def mbf-read
+  (fn (_ text i)
+    (let ((n (Str8 length text)))
+      (let ((at (fn (_ j) (if (int< j n) (str-byte-ref text j) 0))))
+        (let ((digit? (fn (_ j) (let ((c (at j))) (and (not (int< c 48)) (not (int< 57 c))))))
+              (digits (fn (self j acc) (if (and (int< j n) (let ((c (at j))) (and (not (int< c 48)) (not (int< 57 c)))))
+                                         (self (int+ j 1) (pair (at j) acc))
+                                         (pair (List reverse acc) j)))))
+          (if (not (or (digit? i) (int= (at i) 46))) ()
+            (let ((whole (digits i ())))
+              (let ((frac (if (int= (at (rest whole)) 46) (digits (int+ (rest whole) 1) ()) (pair () (rest whole)))))
+                (let ((ex (if (int= (at (rest frac)) 69)
+                            (let ((j (int+ (rest frac) 1)))
+                              (let ((neg (int= (at j) 45)))
+                                (let ((ds (digits (if (or neg (int= (at j) 43)) (int+ j 1) j) ())))
+                                  (let ((k (List fold (fn (_ k b) (int+ (int* k 10) (int- b 48))) 0 (List take 3 (first ds)))))
+                                    (pair (if neg (int- 0 k) k) (rest ds))))))
+                            (pair 0 (rest frac)))))
+                  (pair (mbf-from-digits (List append (first whole) (first frac)) (List length (first frac)) (first ex))
+                        (rest ex)))))))))))
+
 ; --- parts ----------------------------------------------------------------
 
 ; The packed bytes as the source writes them, in octal: (mbf-octal 201 0 0 0
@@ -389,4 +415,4 @@
 (provide basic/mbf
   mbf-zero mbf-zero? mbf-bytes mbf->bytes mbf-octal mbf-int mbf-neg mbf-abs mbf-sgn mbf-cmp
   mbf-round mbf-add mbf-sub mbf-mul mbf-div mbf-floor mbf->int mbf->str
-  mbf-from-digits mbf-exponent mbf-mantissa mbf-fac mbf-with-exponent)
+  mbf-from-digits mbf-read mbf-exponent mbf-mantissa mbf-fac mbf-with-exponent)

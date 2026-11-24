@@ -1,24 +1,26 @@
 ; # x-basic -- BASIC on x-lang
 ;
-; ## lib/basic/mem.x -- the 6502's memory: program, variables, arrays, strings
+; ## lib/basic/mem.x -- a BASIC's memory: program, variables, arrays, strings
 ;
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan
 ; @license MIT No Attribution (MIT-0)
 ;
-; A memory is a Dict: (lit bytes) the 64K image, and the pointers the
-; source keeps in page zero, by name.  From TXTTAB up: the program's lines
-; (link, number, crunched text, zero; two zeros at the end), then from
-; VARTAB the simple variables, 7 bytes each, from ARYTAB the arrays, and
-; free space to STREND.  Strings are given space from FRETOP down to it;
-; MEMSIZ is the top.
+; A memory is a Dict: (lit bytes) the 64K image, the dialect's layout, and
+; the pointers the source keeps, by name.  From TXTTAB up: the program's
+; lines (link, number, crunched text, zero; two zeros at the end), then
+; from VARTAB the simple variables, from ARYTAB the arrays, and free space
+; to STREND.  Strings are given space from FRETOP down to it; MEMSIZ is the
+; top.  These are the 6502's and the 8086's alike.
 ;
-; A variable is NAME1 NAME2 and five value bytes: a string's NAME2 has its
-; top bit on, an integer's both, a function's NAME1 only.  An array is
-; NAME1 NAME2, its whole length (low, high), the count of its dimensions,
-; each dimension's size (high, low) from the last subscript to the first,
-; then its elements with the first subscript varying fastest: 5 bytes a
-; number, 2 an integer, 3 a string.
+; How an entry lies is the layout's (the dialect's): a simple variable is
+; its header, the name and type, and its value; an array its header, a
+; length word (low, high), the count of its dimensions, each dimension's
+; size from the last subscript to the first, then its elements with the
+; first subscript varying fastest.  The layout says how long a header is,
+; what type an entry holds (3 a string, whose value is a descriptor: its
+; length and address), how long a value and an element are, what the
+; length word counts, and the order of a size's bytes.
 ;
 ; An error is (Err raise 'basic "OM"), out of memory.
 
@@ -74,12 +76,13 @@
 
 ; --- the memory -----------------------------------------------------------
 
-; A memory whose program starts at START and whose top is TOP, the program
-; empty
+; A memory laid out by LAYOUT whose program starts at START and whose top is
+; TOP, the program empty
 (def mem-make
-  (fn (_ start top)
+  (fn (_ layout start top)
     (let ((mem (Dict make)))
       (mem set! (lit bytes) (Vector make 65536 0))
+      (mem set! (lit layout) layout)
       (mem set! (lit txttab) start)
       (mem set! (lit memsiz) top)
       (mem-program! mem ())
@@ -102,17 +105,16 @@
   (fn (_ mem)
     (let ((vars (let ((go (fn (self a end acc)
                             (if (not (int< a end)) (List reverse acc)
-                              (self (int+ a 7) end
-                                    (if (and (int< (mem-peek mem a) 128) (not (int< (mem-peek mem (int+ a 1)) 128)))
-                                      (pair (int+ a 2) acc) acc))))))
+                              (let ((hl (%mem-header-length mem a)) (type (%mem-type mem a)))
+                                (self (int+ a (int+ hl ((%mem-layout mem (lit value-size)) type))) end
+                                      (if (int= type 3) (pair (int+ a hl) acc) acc)))))))
                   (go (mem get (lit vartab)) (mem get (lit arytab)) ())))
           (arrays (let ((go (fn (self a end acc)
                               (if (not (int< a end)) (List reverse acc)
-                                (let ((next (int+ a (mem-word mem (int+ a 2)))))
-                                  (if (and (int< (mem-peek mem a) 128) (not (int< (mem-peek mem (int+ a 1)) 128)))
-                                    (let ((from (int+ a (int+ 5 (int* 2 (mem-peek mem (int+ a 4)))))))
-                                      (let ((elems (fn (self e acc) (if (not (int< e next)) acc (self (int+ e 3) (pair e acc))))))
-                                        (self next end (elems from acc))))
+                                (let ((next (int+ a (%mem-array-total mem a))))
+                                  (if (int= (%mem-type mem a) 3)
+                                    (let ((elems (fn (self e acc) (if (not (int< e next)) acc (self (int+ e 3) (pair e acc))))))
+                                      (self next end (elems (%mem-elements mem a) acc)))
                                     (self next end acc)))))))
                     (go (mem get (lit arytab)) (mem get (lit strend)) ()))))
       (List append vars arrays))))
@@ -199,54 +201,91 @@
             (mem-clear! mem)
             at))))))
 
+; --- the layout -----------------------------------------------------------
+
+; The layout's door KEY
+(def %mem-layout
+  (fn (_ mem key) ((mem get (lit layout)) get key)))
+
+(def %mem-peeker (fn (_ mem) (fn (_ a) (mem-peek mem a))))
+
+; How long the header of the entry at A is, and its type
+(def %mem-header-length
+  (fn (_ mem a) ((%mem-layout mem (lit header-length)) (%mem-peeker mem) a)))
+
+(def %mem-type
+  (fn (_ mem a) ((%mem-layout mem (lit entry-type)) (%mem-peeker mem) a)))
+
+; Whether the entry at A has the header bytes HEADER
+(def %mem-named?
+  (fn (_ mem a header)
+    (let ((go (fn (self i hs) (or (null? hs) (and (int= (mem-peek mem (int+ a i)) (first hs)) (self (int+ i 1) (rest hs)))))))
+      (and (int= (%mem-header-length mem a) (List length header)) (go 0 header)))))
+
+; The whole length of the array at A, from its length word
+(def %mem-array-total
+  (fn (_ mem a)
+    (let ((hl (%mem-header-length mem a)))
+      ((%mem-layout mem (lit array-total)) (mem-word mem (int+ a hl)) hl))))
+
+; Where the elements of the array at A start: past its header, the length
+; word, the count of dimensions and two bytes for each
+(def %mem-elements
+  (fn (_ mem a)
+    (let ((hl (%mem-header-length mem a)))
+      (int+ a (int+ hl (int+ 3 (int* 2 (mem-peek mem (int+ a (int+ hl 2))))))))))
+
 ; --- variables ------------------------------------------------------------
 
-; The entry of the simple variable N1 N2, or nil
+; The entry of the simple variable whose header is HEADER, or nil
 (def mem-var
-  (fn (_ mem n1 n2)
+  (fn (_ mem header)
     (let ((end (mem get (lit arytab))))
       (let ((go (fn (self a)
                   (match
                     ((not (int< a end)) ())
-                    ((and (int= (mem-peek mem a) n1) (int= (mem-peek mem (int+ a 1)) n2)) a)
-                    (#t (self (int+ a 7)))))))
+                    ((%mem-named? mem a header) a)
+                    (#t (self (int+ a (int+ (%mem-header-length mem a)
+                                            ((%mem-layout mem (lit value-size)) (%mem-type mem a))))))))))
         (go (mem get (lit vartab)))))))
 
-; A new entry for N1 N2 at ARYTAB, the arrays moved up 7, its value zero
+; A new entry, HEADER and SIZE zero bytes of value, at ARYTAB, the arrays
+; moved up past it
 (def mem-var-new!
-  (fn (_ mem n1 n2)
-    (let ((a (mem get (lit arytab))) (end (mem get (lit strend))))
-      (mem-reason mem (int+ end 7))
-      (mem-move! mem a (int+ a 7) (int- end a))
-      (mem set! (lit arytab) (int+ a 7))
-      (mem set! (lit strend) (int+ end 7))
-      (mem-write! mem a (list n1 n2 0 0 0 0 0))
+  (fn (_ mem header size)
+    (let ((a (mem get (lit arytab))) (end (mem get (lit strend))) (n (int+ (List length header) size)))
+      (mem-reason mem (int+ end n))
+      (mem-move! mem a (int+ a n) (int- end a))
+      (mem set! (lit arytab) (int+ a n))
+      (mem set! (lit strend) (int+ end n))
+      (mem-zero! mem a n)
+      (mem-write! mem a header)
       a)))
 
-; The entry of N1 N2, made when there is none
+; The entry of HEADER, made with SIZE bytes of value when there is none
 (def mem-var!
-  (fn (_ mem n1 n2)
-    (let ((a (mem-var mem n1 n2))) (if (null? a) (mem-var-new! mem n1 n2) a))))
+  (fn (_ mem header size)
+    (let ((a (mem-var mem header))) (if (null? a) (mem-var-new! mem header size) a))))
 
 ; --- arrays ---------------------------------------------------------------
 
-; The header of the array N1 N2, or nil
+; The array whose header is HEADER, or nil
 (def mem-array
-  (fn (_ mem n1 n2)
+  (fn (_ mem header)
     (let ((end (mem get (lit strend))))
       (let ((go (fn (self a)
                   (match
                     ((not (int< a end)) ())
-                    ((and (int= (mem-peek mem a) n1) (int= (mem-peek mem (int+ a 1)) n2)) a)
-                    (#t (self (int+ a (mem-word mem (int+ a 2)))))))))
+                    ((%mem-named? mem a header) a)
+                    (#t (self (int+ a (%mem-array-total mem a))))))))
         (go (mem get (lit arytab)))))))
 
-; A new array N1 N2 at STREND of SIZES (each bound + 1, the first
-; subscript's first) and ELEMENT bytes an element, zeroed: its header
+; A new array HEADER at STREND of SIZES (each bound + 1, the first
+; subscript's first) and ELEMENT bytes an element, zeroed: its address
 (def mem-array-new!
-  (fn (_ mem n1 n2 sizes element)
-    (let ((a (mem get (lit strend))) (nd (List length sizes)))
-      (let ((from (int+ a (int+ 5 (int* 2 nd))))
+  (fn (_ mem header sizes element)
+    (let ((a (mem get (lit strend))) (nd (List length sizes)) (hl (List length header)))
+      (let ((from (int+ a (int+ hl (int+ 3 (int* 2 nd)))))
             (count (List fold (fn (_ n s) (int* n s)) 1 sizes)))
         (mem-reason mem from)
         (let ((end (int+ from (int* count element))))
@@ -254,22 +293,21 @@
           (mem-reason mem end)
           (mem set! (lit strend) end)
           (mem-zero! mem a (int- end a))
-          (mem-write! mem a (list n1 n2))
-          (mem-word! mem (int+ a 2) (int- end a))
-          (mem-poke! mem (int+ a 4) nd)
+          (mem-write! mem a header)
+          (mem-word! mem (int+ a hl) ((%mem-layout mem (lit array-field)) (int- end a) hl))
+          (mem-poke! mem (int+ a (int+ hl 2)) nd)
           (let ((go (fn (self at ss)
                       (unless (null? ss)
-                        (mem-poke! mem at (int>> (first ss) 8))
-                        (mem-poke! mem (int+ at 1) (int& (first ss) 255))
+                        (mem-write! mem at ((%mem-layout mem (lit dim-bytes)) (first ss)))
                         (self (int+ at 2) (rest ss))))))
-            (go (int+ a 5) (List reverse sizes)))
+            (go (int+ a (int+ hl 3)) (List reverse sizes)))
           a)))))
 
 ; The address of the element at INDEX (counted with the first subscript
 ; fastest) of the array at A, ELEMENT bytes an element
 (def mem-element
   (fn (_ mem a index element)
-    (int+ (int+ a (int+ 5 (int* 2 (mem-peek mem (int+ a 4))))) (int* index element))))
+    (int+ (%mem-elements mem a) (int* index element))))
 
 (provide basic/mem
   mem-peek mem-poke! mem-word mem-word! mem-write! mem-read mem-move! mem-make mem-at
