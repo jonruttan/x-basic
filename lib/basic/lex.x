@@ -44,7 +44,10 @@
                                     (List map first (dialect get (lit aliases)))))
                      (Lexer skip " \n")
                      (Lexer any (lit c))))))
-          (l end "\n")
+          ; A newline end text on a Lexer that appends one to each read; x-lang
+          ; past v0.61.0 appends nothing and has no end field, and the end of
+          ; the text ends the last token
+          (guard (_ ()) (l end "\n"))
           (%basic-lexers set! name l)))
       (%basic-lexers get name))))
 
