@@ -14,7 +14,7 @@
 (import x/type/list)
 (import x/type/str)
 (import x/type/dict)
-(import x/core/doors int=)
+(import x/core/doors int= int<)
 (import x/repl/line)
 (import x/repl/lang)
 (import x/repl/term)
@@ -56,6 +56,9 @@
       (let ((m (basic-machine m6502-dialect basic-term-out basic-term-zeros %basic-reply %basic-key)))
         (m set! (lit fold-case)
           (basic-fold-case-setting (Sys getenv "X_BASIC_FOLD_CASE") (m get (lit fold-case))))
+        ; the tape file SAVE and LOAD use, X_BASIC_TAPE when it is set
+        (let ((tape (Sys getenv "X_BASIC_TAPE")))
+          (when (and (str? tape) (int< 0 (Str8 length tape))) (m set! (lit tape) tape)))
         (basic-boot-begin! m)
         (%basic-session set! (lit m) m)))
     (%basic-session get (lit m))))
