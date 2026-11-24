@@ -12,7 +12,10 @@
 (import x/type/str)
 (import x/type/dict)
 (import x/sys/file)
-(import x/core/doors int+ int< int= str-byte-ref str-byte-len str-make)
+(import x/core/doors int+ int< int= int& str-byte-ref str-byte-len str-make)
+(import x/type/vector)
+(import x/type/err)
+(import basic/cpu cpu-make cpu-call!)
 (import basic/m6502 m6502-dialect)
 (import basic/lex basic-lex)
 (import basic/mbf mbf-int mbf-div mbf-mul mbf-add mbf->str mbf-bytes)
@@ -99,6 +102,26 @@
 
 ; TEXT typed into a machine that reads it as typed, its case kept
 (def %basic-typed-cased (fn (_ text) (%basic-typed-on #f text ())))
+
+; CODE, a list of bytes, put at $0300 in a fresh 64K and called, HOOKS a
+; list of (ADDRESS . FN); answers (A X Y P) after its RTS, P in binary
+; NV-BDIZC order as a string
+(def %basic-cpu
+  (fn (_ code hooks)
+    (let ((bytes (Vector make 65536 0)) (h (Dict make)))
+      (List for-each (fn (_ i) (Vector set! (int+ 768 i) (List ref i code) bytes))
+        (List range 0 (List length code)))
+      (List for-each (fn (_ e) (h set! (first e) (rest e))) hooks)
+      (let ((c (cpu-make bytes)))
+        (cpu-call! c 768 h)
+        (list (c get (lit a)) (c get (lit x)) (c get (lit y))
+              (Str8 join ""
+                (List map (fn (_ bit) (if (int= (int& (c get (lit p)) bit) 0) "0" "1"))
+                  (list 128 64 32 16 8 4 2 1))))))))
+
+; The label and payload of the error THUNK raises
+(def %basic-raised
+  (fn (_ thunk) (guard (e (list (Err label e) (Err text e))) (thunk))))
 
 ; TEXT's tokens in the 6502 dialect
 (def %basic-tokens (fn (_ text) (basic-lex m6502-dialect text)))

@@ -28,11 +28,12 @@
 (import x/core/doors int+ int- int* int/ int% int< int= int<< int>> int& int| str-byte-ref)
 (import basic/mbf
   mbf-zero mbf-zero? mbf-bytes mbf->bytes mbf-int mbf-neg mbf-abs mbf-sgn mbf-cmp mbf-round mbf-add mbf-sub
-  mbf-mul mbf-div mbf-floor mbf->int mbf->str)
+  mbf-mul mbf-div mbf-floor mbf->int mbf->str mbf-exponent mbf-mantissa mbf-fac)
 (import basic/mbf-math
   mbf-log mbf-exp mbf-power mbf-sqr mbf-sin mbf-cos mbf-tan mbf-atn mbf-rnd-seed mbf-rnd)
 (import basic/lex basic-lex basic-fold basic-crunch basic-detokenize)
 (import basic/tape tape-save tape-load)
+(import basic/cpu cpu-make cpu-call!)
 (import basic/parse basic-parse-line basic-parse-value basic-items)
 (import basic/mem
   mem-peek mem-poke! mem-word mem-word! mem-write! mem-read mem-make mem-at mem-clear! mem-string!
@@ -76,7 +77,18 @@
       (m set! (lit tape) "basic.tape")
       (%bx-index! m ())
       (%bx-clear! m)
+      (%bx-page-zero! m)
       m)))
+
+; What INIT leaves in page zero for USR: ADRAYI and ADRGAY, and USRPOK a
+; JMP to FCERR
+(def %bx-page-zero!
+  (fn (_ m)
+    (let ((mem (%bx-mem m)) (d (m get (lit dialect))))
+      (mem-word! mem (d get (lit adrayi)) (d get (lit ayint)))
+      (mem-word! mem (d get (lit adrgay)) (d get (lit givayf)))
+      (mem-poke! mem (d get (lit usrpok)) 76)
+      (mem-word! mem (int+ (d get (lit usrpok)) 1) (d get (lit fcerr))))))
 
 (def %bx-width!
   (fn (_ m width last-comma)
@@ -443,6 +455,65 @@
       (let ((got (basic-parse-value ts)))
         (if (null? got) () (pair (%bx-eval m (first got)) (rest got)))))))
 
+; --- USR ------------------------------------------------------------------
+
+; Number V put in the FAC as the 6502 holds it unpacked: FACEXP, the four
+; mantissa bytes, FACSGN 0 or $FF, and FACOV the guard byte
+(def %bx-fac!
+  (fn (_ m v)
+    (let ((mem (%bx-mem m)) (fac ((m get (lit dialect)) get (lit fac))) (mag (mbf-mantissa v)))
+      (mem-poke! mem fac (mbf-exponent v))
+      (mem-write! mem (int+ fac 1)
+        (list (int& (int>> mag 32) 255) (int& (int>> mag 24) 255) (int& (int>> mag 16) 255)
+              (int& (int>> mag 8) 255) (if (int< (mbf-sgn v) 0) 255 0)))
+      (mem-poke! mem ((m get (lit dialect)) get (lit facov)) (int& mag 255)))))
+
+; The number in the FAC, normalised as FADD would leave it
+(def %bx-fac
+  (fn (_ m)
+    (let ((mem (%bx-mem m)) (fac ((m get (lit dialect)) get (lit fac))))
+      (let ((ex (mem-peek mem fac)) (b (mem-read mem (int+ fac 1) 5)))
+        (if (int= ex 0) mbf-zero
+          (mbf-fac (not (int< (List ref 4 b) 128))
+            (int+ (int<< (int+ (int<< (int+ (int<< (int+ (int<< (first b) 8) (List second b)) 8) (List third b)) 8)
+                                  (List ref 3 b)) 8)
+                  (mem-peek mem ((m get (lit dialect)) get (lit facov))))
+            (int- ex 168)))))))
+
+; The ROM routines a USR routine reaches, run here when the 6502 reaches
+; their addresses: FCERR; AYINT, the FAC floored to a signed 32-bit integer
+; in FACHO..FACLO, ?FC outside -32768..32767; GIVAYF, the signed integer in
+; A (high) and Y (low) made the FAC
+(def %bx-usr-hooks
+  (fn (_ m)
+    (let ((d (m get (lit dialect))) (mem (%bx-mem m)) (h (Dict make)))
+      (h set! (d get (lit fcerr)) (fn (_ c) (%bx-fail "FC")))
+      (h set! (d get (lit ayint))
+        (fn (_ c)
+          (let ((v (%bx-fac m)))
+            (when (and (not (int< (mbf-exponent v) 144)) (not (int= (mbf-cmp v (mbf-int -32768)) 0)))
+              (%bx-fail "FC"))
+            (let ((n (mbf->int (mbf-floor v) 65536)))
+              (mem-write! mem (int+ (d get (lit fac)) 1)
+                (list (int& (int>> n 24) 255) (int& (int>> n 16) 255) (int& (int>> n 8) 255) (int& n 255)))))))
+      (h set! (d get (lit givayf))
+        (fn (_ c)
+          (mem-poke! mem (d get (lit valtyp)) 0)
+          (%bx-fac! m (mbf-int (%bx-signed (int+ (int<< (c get (lit a)) 8) (c get (lit y))))))))
+      h)))
+
+; USR(A): A in the FAC, VALTYP set by its type, the routine USRPOK jumps to
+; called, and the FAC its value once VALTYP says it is a number (CHKNUM)
+(def %bx-usr
+  (fn (_ m a)
+    (let ((d (m get (lit dialect))) (mem (%bx-mem m)))
+      (if (pair? a)
+        (do (%bx-fac! m a) (mem-poke! mem (d get (lit valtyp)) 0))
+        (mem-poke! mem (d get (lit valtyp)) 255))
+      (guard (e (if (eq? (Err label e) (lit cpu)) (Err raise (lit basic-todo) (Err text e)) (error e)))
+        (cpu-call! (cpu-make (mem-at mem (lit bytes))) (d get (lit usrpok)) (%bx-usr-hooks m)))
+      (if (int= (mem-peek mem (d get (lit valtyp))) 0) (%bx-fac m) (%bx-fail "TM")))))
+
 (def %bx-call
   (fn (_ m word args)
     (let ((a (first args)))
@@ -476,6 +547,7 @@
           (do (unless (pair? a) (%bx-string a))
               (mbf-int (%bx-signed (int& (mem-free (%bx-mem m)) 65535)))))
         ((str=? word "PEEK") (mbf-int (mem-peek (%bx-mem m) (%bx-address a))))
+        ((str=? word "USR") (%bx-usr m a))
         ((str=? word "SQR") (mbf-sqr (%bx-number a)))
         ((str=? word "LOG") (mbf-log (%bx-number a)))
         ((str=? word "EXP") (mbf-exp (%bx-number a)))
