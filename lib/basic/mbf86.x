@@ -1,0 +1,853 @@
+; # x-basic -- BASIC on x-lang
+;
+; ## lib/basic/mbf86.x -- the 8086 BASIC's numbers
+;
+; @author [Jon Ruttan](jonruttan@gmail.com)
+; @copyright 2026 Jon Ruttan
+; @license MIT No Attribution (MIT-0)
+;
+; GW-BASIC's three numeric types, as Microsoft's MIT-licensed 8086 source
+; (MATH1.ASM, MATH2.ASM) computes them, made of integers.
+;
+; A number is a list whose first item is its VALTYP: (2 N) an integer, N
+; from -32768 to 32767; (4 NEG EXP MANT) a single and (8 NEG EXP MANT) a
+; double, EXP the exponent in excess 128 (0 for zero) and MANT the 24 or 56
+; bit mantissa with its top bit set, so the value is MANT * 2^(EXP - 128 -
+; bits).  Packed, a single is four bytes and a double eight, low first: the
+; mantissa without its top bit, the sign in that bit's place, the exponent.
+;
+; The arithmetic is the 8086's.  A single works in 32 bits, the mantissa
+; and a guard byte whose bit $20 is a sticky bit; $ROUNS keeps the guard
+; byte's top three bits and rounds half to even.  A double works in 64 bits
+; with an overflow byte.  The multiplies keep what the source keeps: a
+; single's drops the lowest partial product's low word; a double's is
+; exact, its low bytes a sticky bit.  The divides are exact, rounded half
+; to even.  A double goes to a single on the byte below the single's
+; mantissa alone, half rounding up.
+;
+; Where the 8086 BASIC prints "Overflow" or "Division by zero" and goes on
+; with the largest number, these raise 'basic-overflow or 'basic-div0, the
+; text the kind and sign ("4+", "8-"): m86-infinity gives that number.  An
+; integer that will not fit is ?OV, 'basic "OV", as FRCINT's error is.
+
+(module basic/mbf86)
+(import x/type/list)
+(import x/type/str)
+(import x/type/vector)
+(import x/type/err)
+(import x/core/doors int+ int- int* int/ int% int< int= int<< int>> int& int| str-byte-ref)
+
+(def %m86-mask32 (int- (int<< 1 32) 1))
+(def %m86-two24 (int<< 1 24))
+(def %m86-two56 (int<< 1 56))
+(def %m86-mask56 (int- (int<< 1 56) 1))
+
+; --- values ---------------------------------------------------------------
+
+(def m86-int (fn (_ n) (list 2 n)))
+(def m86-kind (fn (_ v) (first v)))
+(def m86-integer (fn (_ v) (List second v)))
+
+(def %m86-neg? (fn (_ v) (List second v)))
+(def %m86-exp (fn (_ v) (List third v)))
+(def %m86-mant (fn (_ v) (List ref 3 v)))
+(def %m86-bits (fn (_ k) (if (int= k 8) 56 24)))
+
+(def %m86-zero (fn (_ k) (list k #f 0 0)))
+
+; A float, zero when its exponent is
+(def %m86-make
+  (fn (_ k neg e m) (if (int= e 0) (%m86-zero k) (list k neg e m))))
+
+(def m86-zero?
+  (fn (_ v) (if (int= (first v) 2) (int= (List second v) 0) (int= (%m86-exp v) 0))))
+
+(def %m86-word? (fn (_ n) (and (not (int< n -32768)) (not (int< 32767 n)))))
+
+; --- the overflow ---------------------------------------------------------
+
+(def %m86-sign-text
+  (fn (_ k neg) (Str8 append (if (int= k 8) "8" "4") (if neg "-" "+"))))
+
+(def %m86-overflow (fn (_ k neg) (Err raise (lit basic-overflow) (%m86-sign-text k neg))))
+(def %m86-div0 (fn (_ k neg) (Err raise (lit basic-div0) (%m86-sign-text k neg))))
+(def %m86-ov (fn (_) (Err raise (lit basic) "OV")))
+
+; The largest number of the kind and sign TEXT names, as DOINF gives it
+(def m86-infinity
+  (fn (_ text)
+    (let ((k (if (str=? (Str8 sub 0 1 text) "8") 8 4)))
+      (list k (str=? (Str8 sub 1 1 text) "-") 255 (if (int= k 8) %m86-mask56 (int- %m86-two24 1))))))
+
+; --- single precision -----------------------------------------------------
+
+; R, the 24-bit mantissa and the guard byte, rounded and packed ($ROUNM): up
+; when the guard's top bit is set, to even when it is exactly half
+(def %s-rounm
+  (fn (_ neg e r)
+    (let ((ah (int& r 255)) (m (int>> r 8)))
+      (if (int< ah 128) (%m86-make 4 neg e m)
+        (let ((m1 (int+ m 1)))
+          (match
+            ((int= m1 %m86-two24)
+              (if (int= e 255) (%m86-overflow 4 neg) (%m86-make 4 neg (int+ e 1) (int<< 1 23))))
+            ; DX wrapped: the result is even
+            ((int= (int& m1 65535) 0) (%m86-make 4 neg e m1))
+            ((int= ah 128) (%m86-make 4 neg e (int- m1 (int& m1 1))))
+            (#t (%m86-make 4 neg e m1))))))))
+
+; $ROUNS: the guard byte's low five bits cleared first
+(def %s-rounds
+  (fn (_ neg e r) (%s-rounm neg e (int- r (int& r 31)))))
+
+; $NORMS: R shifted left, a byte while its top byte is zero, then a bit,
+; the exponent following; zero when the exponent runs out
+(def %s-norms
+  (fn (_ neg e r)
+    (let ((go (fn (self e r)
+                (let ((bl (int>> r 24)))
+                  (match
+                    ((not (int< bl 128)) (%s-rounds neg e r))
+                    ((not (int= bl 0))
+                      (if (int= e 1) (%m86-zero 4) (self (int- e 1) (int& (int<< r 1) %m86-mask32))))
+                    ((int< e 9) (%m86-zero 4))
+                    (#t (self (int- e 8) (int& (int<< r 8) %m86-mask32))))))))
+      (if (int= r 0) (%m86-zero 4) (go e r)))))
+
+; The smaller addend S, 32 bits, shifted right D bits as $FADDS shifts it:
+; a byte at a time while it can, then a bit, any bit lost setting $20
+(def %s-align
+  (fn (_ s d)
+    (match
+      ((int= d 0) s)
+      ((not (int< d 8))
+        (let ((t (int>> s 8)))
+          (let ((t (if (int= (int& s 255) 0) t (int| t 32))))
+            (%s-align (if (int= (int& t 31) 0) t (int| t 32)) (int- d 8)))))
+      (#t
+        (let ((t (int>> s 1)))
+          (%s-align (if (int= (int& t 16) 0) t (int| t 32)) (int- d 1)))))))
+
+; A + B, singles ($FADDS)
+(def %s-add
+  (fn (_ a b)
+    (match
+      ((int= (%m86-exp b) 0) a)
+      ((int= (%m86-exp a) 0) b)
+      (#t
+        (let ((swap (int< (%m86-exp a) (%m86-exp b))))
+          (let ((x (if swap b a)) (y (if swap a b)))
+            (let ((d (int- (%m86-exp x) (%m86-exp y))) (neg (%m86-neg? x)) (e (%m86-exp x)))
+              ; the smaller is lost past 24 bits, and the larger kept as it is
+              (if (not (int< d 25)) x
+                (let ((s (%s-align (int<< (%m86-mant y) 8) d)) (big (int<< (%m86-mant x) 8)))
+                  (if (eq? (%m86-neg? x) (%m86-neg? y))
+                    (let ((r (int+ big s)))
+                      (if (int< r (int<< 1 32)) (%s-rounds neg e r)
+                        (if (int= e 255) (%m86-overflow 4 neg)
+                          (%s-rounds neg (int+ e 1) (int>> r 1)))))
+                    (let ((r (int- big s)))
+                      (if (int< r 0) (%s-norms (not neg) e (int- 0 r)) (%s-norms neg e r)))))))))))))
+
+; The product's exponent as $AEXPS sums them: nil when it underflows, ?OV
+; past 255
+(def %m86-aexps
+  (fn (_ k neg e1 e2)
+    (let ((raw (int- (int+ e1 e2) 257)))
+      (match
+        ((int< raw 0) (if (int< (int+ raw 128) 0) () (int+ raw 128)))
+        ((int< raw 128) (int+ raw 128))
+        (#t (%m86-overflow k neg))))))
+
+; A * B, singles ($FMULS): the 48-bit product from four 16-bit partial
+; products, the lowest one's low word dropped
+(def %s-mul
+  (fn (_ a b)
+    (if (or (int= (%m86-exp a) 0) (int= (%m86-exp b) 0)) (%m86-zero 4)
+      (let ((neg (not (eq? (%m86-neg? a) (%m86-neg? b)))))
+        (let ((e (%m86-aexps 4 neg (%m86-exp a) (%m86-exp b))))
+          (if (null? e) (%m86-zero 4)
+            (let ((ma (%m86-mant a)) (mb (%m86-mant b)))
+              (let ((ah (int>> ma 16)) (al (int& ma 65535)) (bh (int>> mb 16)) (bl (int& mb 65535)))
+                (let ((s (int+ (int+ (int>> (int* al bl) 16) (int* al bh))
+                               (int+ (int* bl ah) (int<< (int* ah bh) 16)))))
+                  (if (not (int< s (int<< 1 31)))
+                    (if (int= e 255) (%m86-overflow 4 neg) (%s-rounds neg (int+ e 1) s))
+                    (%s-rounds neg e (int& (int<< s 1) %m86-mask32))))))))))))
+
+; A quotient Q of BITS bits with a sticky bit at its bottom, normalised and
+; rounded half to even on its low byte, as $SDIV and $DDIV finish
+(def %m86-div-round
+  (fn (_ k neg e q bits)
+    (let ((top (int<< 1 (int- bits 1))) (mask (int- (int<< 1 bits) 1)) (mbits (int- bits 8)))
+      (let ((norm (if (not (int< q top))
+                    (if (int= e 255) (%m86-overflow k neg) (pair (int+ e 1) q))
+                    (if (int= e 0) () (pair e (int& (int<< q 1) mask))))))
+        (if (null? norm) (%m86-zero k)
+          (let ((e (first norm)) (q (rest norm)))
+            (let ((dl (int& q 255)) (m (int>> q 8)))
+              (if (or (int< 128 dl) (and (int= dl 128) (int= (int& m 1) 1)))
+                (let ((m1 (int+ m 1)))
+                  (if (int= m1 (int<< 1 mbits))
+                    (if (int= e 255) (%m86-overflow k neg)
+                      (%m86-make k neg (int+ e 1) (int<< 1 (int- mbits 1))))
+                    (%m86-make k neg e m1)))
+                (%m86-make k neg e m)))))))))
+
+; The exponent of A / B, or nil when it underflows; ?OV past 255
+(def %m86-dexp
+  (fn (_ k neg a b)
+    (let ((diff (int- (%m86-exp a) (%m86-exp b))))
+      (match
+        ((int< 127 diff) (%m86-overflow k neg))
+        ((int< diff -128) ())
+        (#t (int+ diff 128))))))
+
+; A / B, singles ($SDIV): 32 quotient bits, a remainder setting the last
+(def %s-div
+  (fn (_ a b)
+    (match
+      ((int= (%m86-exp b) 0) (%m86-div0 4 (%m86-neg? a)))
+      ((int= (%m86-exp a) 0) (%m86-zero 4))
+      (#t
+        (let ((neg (not (eq? (%m86-neg? a) (%m86-neg? b)))))
+          (let ((e (%m86-dexp 4 neg a b)))
+            (if (null? e) (%m86-zero 4)
+              (let ((n (int<< (%m86-mant a) 31)) (d (%m86-mant b)))
+                (let ((q (int/ n d)))
+                  (%m86-div-round 4 neg e (if (int= (int% n d) 0) q (int| q 1)) 32))))))))))
+
+; --- double precision -----------------------------------------------------
+
+; A double at work is (M . O): the 56-bit mantissa and the overflow byte.
+
+; M and O rounded and packed ($ROUND): half adds to the overflow byte, and
+; a carry rounds up, to even when the byte was exactly half
+(def %d-round
+  (fn (_ neg e m o)
+    (if (int< o 128) (%m86-make 8 neg e m)
+      (let ((m1 (int+ m 1)))
+        (let ((up (if (int= m1 %m86-two56)
+                    (if (int= e 255) (%m86-overflow 8 neg) (pair (int+ e 1) (int<< 1 55)))
+                    (pair e m1))))
+          (let ((m2 (rest up)))
+            (%m86-make 8 neg (first up) (if (int= o 128) (int- m2 (int& m2 1)) m2))))))))
+
+; $NORMD: shifted left a byte while the top byte is zero, then a bit; zero
+; when the exponent or the 57 bits allowed run out
+(def %d-normd
+  (fn (_ neg e m o)
+    (let ((go (fn (self e m o dl)
+                (let ((top (int>> m 48)))
+                  (match
+                    ((not (int< top 128)) (%d-round neg e m o))
+                    ((not (int= top 0))
+                      (if (or (int= e 1) (int= dl 1)) (%m86-zero 8)
+                        (self (int- e 1) (int& (int| (int<< m 1) (int>> o 7)) %m86-mask56)
+                              (int& (int<< o 1) 255) (int- dl 1))))
+                    ((or (int< e 9) (int< dl 9)) (%m86-zero 8))
+                    (#t (self (int- e 8) (int& (int| (int<< m 8) o) %m86-mask56) 0 (int- dl 8))))))))
+      (if (and (int= m 0) (int= o 0)) (%m86-zero 8) (go e m o 57)))))
+
+; The smaller addend (M . O) shifted right D bits as $SHRA shifts it: a byte
+; at a time, the old overflow byte's $20 kept, then a bit, bit $10 setting $20
+(def %d-align
+  (fn (_ m o d)
+    (match
+      ((int= d 0) (pair m o))
+      ((not (int< d 8))
+        (%d-align (int>> m 8) (int| (int& m 255) (int& o 32)) (int- d 8)))
+      (#t
+        (let ((o2 (int| (int<< (int& m 1) 7) (int>> o 1))))
+          (%d-align (int>> m 1) (if (int= (int& o2 16) 0) o2 (int| o2 32)) (int- d 1)))))))
+
+; A + B, doubles ($FADDD)
+(def %d-add
+  (fn (_ a b)
+    (match
+      ((int= (%m86-exp b) 0) a)
+      ((int= (%m86-exp a) 0) b)
+      (#t
+        (let ((swap (int< (%m86-exp a) (%m86-exp b))))
+          (let ((x (if swap b a)) (y (if swap a b)))
+            (let ((d (int- (%m86-exp x) (%m86-exp y))) (neg (%m86-neg? x)) (e (%m86-exp x)))
+              (if (not (int< d 57)) x
+                (let ((s (%d-align (%m86-mant y) 0 d)) (mx (%m86-mant x)))
+                  (if (eq? (%m86-neg? x) (%m86-neg? y))
+                    (let ((m (int+ mx (first s))) (o (rest s)))
+                      (if (int< m %m86-two56) (%d-round neg e m o)
+                        (if (int= e 255) (%m86-overflow 8 neg)
+                          (%d-round neg (int+ e 1) (int>> m 1) (int| (int<< (int& m 1) 7) (int>> o 1))))))
+                    (let ((borrow (if (int= (rest s) 0) 0 1)))
+                      (let ((m (int- (int- mx (first s)) borrow)) (o (int& (int- 0 (rest s)) 255)))
+                        (if (not (int< m 0)) (%d-normd neg e m o)
+                          (if (int= o 0) (%d-normd (not neg) e (int- 0 m) 0)
+                            (%d-normd (not neg) e (int- -1 m) (int- 256 o))))))))))))))))
+
+; MA * MB, 56-bit mantissas, as (HI . LO): the 112-bit product in two
+; 56-bit halves, made of 28-bit pieces
+(def %d-product
+  (fn (_ ma mb)
+    (let ((m28 (int- (int<< 1 28) 1)))
+      (let ((a1 (int>> ma 28)) (a0 (int& ma m28)) (b1 (int>> mb 28)) (b0 (int& mb m28)))
+        (let ((mid (int+ (int* a1 b0) (int* a0 b1))))
+          (let ((t (int+ (int* a0 b0) (int<< (int& mid m28) 28))))
+            (pair (int+ (int+ (int* a1 b1) (int>> mid 28)) (int>> t 56))
+                  (int& t %m86-mask56))))))))
+
+; A * B, doubles ($FMULD): the exact product, its bytes below the overflow
+; byte a sticky bit
+(def %d-mul
+  (fn (_ a b)
+    (if (or (int= (%m86-exp a) 0) (int= (%m86-exp b) 0)) (%m86-zero 8)
+      (let ((neg (not (eq? (%m86-neg? a) (%m86-neg? b)))))
+        (let ((e (%m86-aexps 8 neg (%m86-exp a) (%m86-exp b))))
+          (if (null? e) (%m86-zero 8)
+            (let ((p (%d-product (%m86-mant a) (%m86-mant b))))
+              (let ((m (first p))
+                    (o (let ((o (int& (int>> (rest p) 48) 255)))
+                         (if (int= (int& (rest p) (int- (int<< 1 48) 1)) 0) o (int| o 32)))))
+                (if (not (int< m (int<< 1 55)))
+                  (if (int= e 255) (%m86-overflow 8 neg) (%d-round neg (int+ e 1) m o))
+                  (%d-round neg e (int& (int| (int<< m 1) (int>> o 7)) %m86-mask56) (int& (int<< o 1) 255)))))))))))
+
+; floor(N * 2^63 / D), N and D mantissas, by long division: (HI LO REM),
+; HI and LO its 32-bit halves
+(def %d-quotient
+  (fn (_ n d)
+    (let ((go (fn (self i r hi lo)
+                (if (int= i 64) (list hi lo r)
+                  (let ((r2 (if (int= i 0) r (int<< r 1))))
+                    (let ((bit (if (int< r2 d) 0 1)))
+                      (let ((r3 (if (int= bit 0) r2 (int- r2 d))))
+                        (if (int< i 32)
+                          (self (int+ i 1) r3 (int| (int<< hi 1) bit) lo)
+                          (self (int+ i 1) r3 hi (int| (int<< lo 1) bit))))))))))
+      (go 0 n 0 0))))
+
+; A / B, doubles ($DDIV): 64 quotient bits, a remainder setting the last
+(def %d-div
+  (fn (_ a b)
+    (let ((neg (not (eq? (%m86-neg? a) (%m86-neg? b)))))
+      (match
+        ((int= (%m86-exp b) 0) (%m86-div0 8 neg))
+        ((int= (%m86-exp a) 0) (%m86-zero 8))
+        (#t
+          (let ((e (%m86-dexp 8 neg a b)))
+            (if (null? e) (%m86-zero 8)
+              (let ((q (%d-quotient (%m86-mant a) (%m86-mant b))))
+                (let ((hi (first q)) (lo (if (int= (List third q) 0) (List second q) (int| (List second q) 1))))
+                  ; the quotient's 64 bits are worked in halves, as the
+                  ; word does not hold them
+                  (let ((norm (if (not (int< hi (int<< 1 31)))
+                                (if (int= e 255) (%m86-overflow 8 neg) (list (int+ e 1) hi lo))
+                                (if (int= e 0) ()
+                                  (list e (int& (int| (int<< hi 1) (int>> lo 31)) %m86-mask32)
+                                        (int& (int<< lo 1) %m86-mask32))))))
+                    (if (null? norm) (%m86-zero 8)
+                      (let ((e (first norm)) (hi (List second norm)) (lo (List third norm)))
+                        (let ((dl (int& lo 255)) (m (int| (int<< hi 24) (int>> lo 8))))
+                          (if (or (int< 128 dl) (and (int= dl 128) (int= (int& m 1) 1)))
+                            (let ((m1 (int+ m 1)))
+                              (if (int= m1 %m86-two56)
+                                (if (int= e 255) (%m86-overflow 8 neg) (%m86-make 8 neg (int+ e 1) (int<< 1 55)))
+                                (%m86-make 8 neg e m1)))
+                            (%m86-make 8 neg e m)))))))))))))))
+
+; --- conversions ----------------------------------------------------------
+
+; The integer N as a single ($FLT): exact
+(def %m86-flt
+  (fn (_ n)
+    (if (int= n 0) (%m86-zero 4)
+      (%s-norms (int< n 0) 144 (int<< (if (int< n 0) (int- 0 n) n) 16)))))
+
+; A double as a single ($CSD): the byte below the single's mantissa, its
+; bit $40 set, rounds; the bytes below it are not looked at
+(def %m86-csd
+  (fn (_ v)
+    (if (int= (%m86-exp v) 0) (%m86-zero 4)
+      (let ((m (%m86-mant v)))
+        (%s-rounm (%m86-neg? v) (%m86-exp v)
+          (int| (int<< (int>> m 32) 8) (int| (int& (int>> m 24) 255) 64)))))))
+
+; A single as a double ($CDS): exact
+(def %m86-cds
+  (fn (_ v) (list 8 (%m86-neg? v) (%m86-exp v) (int<< (%m86-mant v) 32))))
+
+(def m86->single
+  (fn (_ v)
+    (match
+      ((int= (first v) 2) (%m86-flt (m86-integer v)))
+      ((int= (first v) 8) (%m86-csd v))
+      (#t v))))
+
+(def m86->double
+  (fn (_ v)
+    (match
+      ((int= (first v) 2) (%m86-cds (%m86-flt (m86-integer v))))
+      ((int= (first v) 4) (%m86-cds v))
+      (#t v))))
+
+; V as an integer (FRCINT): the top 16 mantissa bits shifted into place and
+; rounded on the last bit out, half away from zero; ?OV outside
+; -32768..32767
+(def m86-cint
+  (fn (_ v)
+    (if (int= (first v) 2) v
+      (let ((e (int- (%m86-exp v) 128))
+            (m24 (if (int= (first v) 8) (int>> (%m86-mant v) 32) (%m86-mant v)))
+            (neg (%m86-neg? v)))
+        (match
+          ((or (int< e 0) (int= (%m86-exp v) 0)) (m86-int 0))
+          ((int< 16 e) (%m86-ov))
+          ; only -32768 has 16 bits; its next byte's top bit rounds it out
+          ((int= e 16)
+            (if (and neg (int= (int>> m24 8) 32768) (int< (int& m24 255) 128)) (m86-int -32768) (%m86-ov)))
+          (#t
+            (let ((u (int>> m24 8)) (cl (int- 16 e)))
+              (let ((r (int+ (int>> u cl) (int& (int>> u (int- cl 1)) 1))))
+                (match
+                  ((not (int= r 32768)) (m86-int (if neg (int- 0 r) r)))
+                  (neg (m86-int -32768))
+                  (#t (%m86-ov)))))))))))
+
+; |N| < 2^bits as a number of kind K, exactly
+(def %m86-whole
+  (fn (_ k neg n)
+    (if (int= n 0) (%m86-zero k)
+      (let ((top (int<< 1 (int- (%m86-bits k) 1))))
+        (let ((go (fn (self m e) (if (int< m top) (self (int<< m 1) (int- e 1)) (list k neg e m)))))
+          (go n (int+ 128 (%m86-bits k))))))))
+
+; The largest whole number not above V, of V's kind ($INT, $DINT)
+(def m86-floor
+  (fn (_ v)
+    (if (or (int= (first v) 2) (m86-zero? v)) v
+      (let ((k (first v)) (top (int+ 128 (%m86-bits (first v)))))
+        (if (not (int< (%m86-exp v) top)) v
+          (let ((sh (int- top (%m86-exp v))) (m (%m86-mant v)))
+            (let ((whole (if (int< 62 sh) 0 (int>> m sh))))
+              (let ((exact (and (int< sh 63) (int= (int<< whole sh) m))))
+                (if (not (%m86-neg? v)) (%m86-whole k #f whole)
+                  (%m86-whole k #t (if exact whole (int+ whole 1))))))))))))
+
+; --- arithmetic -----------------------------------------------------------
+
+; The kind two operands meet in: double if either is, then single
+(def %m86-meet
+  (fn (_ a b)
+    (if (or (int= (first a) 8) (int= (first b) 8)) 8 (if (or (int= (first a) 4) (int= (first b) 4)) 4 2))))
+
+(def %m86-as (fn (_ k v) (if (int= k 8) (m86->double v) (m86->single v))))
+
+(def m86-neg
+  (fn (_ v)
+    (match
+      ((int= (first v) 2)
+        (if (int= (m86-integer v) -32768) (m86-neg (%m86-flt -32768)) (m86-int (int- 0 (m86-integer v)))))
+      ((m86-zero? v) v)
+      (#t (list (first v) (not (%m86-neg? v)) (%m86-exp v) (%m86-mant v))))))
+
+(def m86-abs
+  (fn (_ v)
+    (if (int= (first v) 2)
+      (if (int< (m86-integer v) 0) (m86-neg v) v)
+      (if (%m86-neg? v) (m86-neg v) v))))
+
+; -1, 0 or 1, an integer
+(def m86-sgn
+  (fn (_ v)
+    (m86-int
+      (if (int= (first v) 2)
+        (match ((int< (m86-integer v) 0) -1) ((int= (m86-integer v) 0) 0) (#t 1))
+        (match ((m86-zero? v) 0) ((%m86-neg? v) -1) (#t 1))))))
+
+; A + B, A - B and A * B: integers stay integers until they will not fit,
+; then are floated and the singles' arithmetic done (IADD, ISUB, IMULT)
+(def m86-add
+  (fn (_ a b)
+    (let ((k (%m86-meet a b)))
+      (match
+        ((int= k 2)
+          (let ((s (int+ (m86-integer a) (m86-integer b))))
+            (if (%m86-word? s) (m86-int s) (%s-add (%m86-flt (m86-integer a)) (%m86-flt (m86-integer b))))))
+        ((int= k 4) (%s-add (m86->single a) (m86->single b)))
+        (#t (%d-add (m86->double a) (m86->double b)))))))
+
+(def m86-sub
+  (fn (_ a b)
+    (if (and (int= (%m86-meet a b) 2) (int= (m86-integer b) -32768))
+      ; ISUB: -32768.0 less A, negated, then made an integer again
+      (m86-cint (m86-neg (%s-add (%m86-flt -32768) (m86-neg (%m86-flt (m86-integer a))))))
+      (m86-add a (m86-neg b)))))
+
+(def m86-mul
+  (fn (_ a b)
+    (let ((k (%m86-meet a b)))
+      (match
+        ((int= k 2)
+          (let ((p (int* (m86-integer a) (m86-integer b))))
+            (if (%m86-word? p) (m86-int p) (%s-mul (%m86-flt (m86-integer a)) (%m86-flt (m86-integer b))))))
+        ((int= k 4) (%s-mul (m86->single a) (m86->single b)))
+        (#t (%d-mul (m86->double a) (m86->double b)))))))
+
+; A / B: a single unless a double is in it (INTDIV floats integers)
+(def m86-div
+  (fn (_ a b)
+    (if (int= (%m86-meet a b) 8) (%d-div (m86->double a) (m86->double b))
+      (%s-div (m86->single a) (m86->single b)))))
+
+; A \ B, each made an integer first (IDIV): truncated toward zero; the one
+; quotient that will not fit, -32768 \ -1, a single
+(def m86-idiv
+  (fn (_ a b)
+    (let ((x (m86-integer (m86-cint a))) (y (m86-integer (m86-cint b))))
+      (match
+        ((int= y 0) (%m86-div0 4 (int< x 0)))
+        ((and (int= x -32768) (int= y -1)) (m86-neg (%m86-flt -32768)))
+        (#t (m86-int (int/ x y)))))))
+
+; A MOD B, each made an integer first (IMOD): the remainder, its sign A's
+(def m86-mod
+  (fn (_ a b)
+    (let ((x (m86-integer (m86-cint a))) (y (m86-integer (m86-cint b))))
+      (match
+        ((int= x y) (m86-int 0))
+        ((int= y 0) (%m86-div0 4 (int< x 0)))
+        (#t (m86-int (int% x y)))))))
+
+; -1, 0 or 1 as A is below, equal to or above B, compared exactly in the
+; kind they meet in
+(def m86-cmp
+  (fn (_ a b)
+    (let ((k (%m86-meet a b)))
+      (if (int= k 2)
+        (let ((x (m86-integer a)) (y (m86-integer b)))
+          (match ((int< x y) -1) ((int< y x) 1) (#t 0)))
+        (let ((a (%m86-as k a)) (b (%m86-as k b)))
+          (let ((sa (m86-integer (m86-sgn a))) (sb (m86-integer (m86-sgn b))))
+            (match
+              ((int< sa sb) -1)
+              ((int< sb sa) 1)
+              ((int= sa 0) 0)
+              (#t
+                (let ((c (match
+                           ((int< (%m86-exp a) (%m86-exp b)) -1)
+                           ((int< (%m86-exp b) (%m86-exp a)) 1)
+                           ((int< (%m86-mant a) (%m86-mant b)) -1)
+                           ((int< (%m86-mant b) (%m86-mant a)) 1)
+                           (#t 0))))
+                  (if (int< sa 0) (int- 0 c) c))))))))))
+
+; --- packed bytes ---------------------------------------------------------
+
+; V's bytes as memory holds them, low first
+(def m86->bytes
+  (fn (_ v)
+    (let ((k (first v)))
+      (if (int= k 2)
+        (let ((w (int& (m86-integer v) 65535))) (list (int& w 255) (int>> w 8)))
+        (let ((n (int- k 1)) (m (%m86-mant v)))
+          (if (m86-zero? v) (List map (fn (_ i) 0) (List range 0 k))
+            (List append
+              (List map (fn (_ i) (int& (int>> m (int* 8 i)) 255)) (List range 0 (int- n 1)))
+              (list (int| (int& (int>> m (int* 8 (int- n 1))) 127) (if (%m86-neg? v) 128 0))
+                    (%m86-exp v)))))))))
+
+; The number of kind K in BYTES, low first
+(def m86-from-bytes
+  (fn (_ k bytes)
+    (if (int= k 2)
+      (let ((w (int| (first bytes) (int<< (List second bytes) 8))))
+        (m86-int (if (int< w 32768) w (int- w 65536))))
+      (let ((n (int- k 1)))
+        (let ((ex (List ref n bytes)) (top (List ref (int- n 1) bytes)))
+          (if (int= ex 0) (%m86-zero k)
+            (list k (not (int< top 128)) ex
+              (List fold (fn (_ m i) (int| m (int<< (List ref i bytes) (int* 8 i))))
+                (int<< (int| top 128) (int* 8 (int- n 1)))
+                (List range 0 (int- n 1))))))))))
+
+; A table's bytes as the source writes them, in octal: 201 is $81
+(def %m86-octal
+  (fn (_ n) (int+ (int* (int/ n 100) 64) (int+ (int* (int% (int/ n 10) 10) 8) (int% n 10)))))
+
+(def %m86-octal-double
+  (fn (_ bytes) (m86-from-bytes 8 (List map %m86-octal bytes))))
+
+; --- constants ------------------------------------------------------------
+
+(def %m86-half-single (list 4 #f 128 (int<< 1 23)))
+(def %m86-half-double (list 8 #f 128 (int<< 1 55)))
+(def %m86-ten-single (list 4 #f 132 (int<< 10 20)))
+(def %m86-ten-double (list 8 #f 132 (int<< 10 52)))
+
+; $DPM01, .1, which $DIV10 multiplies a double by
+(def %m86-tenth (%m86-octal-double (list 315 314 314 314 314 314 114 175)))
+
+; HIDBL, 9999999999999999., the largest double a half can be added to
+(def %m86-hidbl (%m86-octal-double (list 375 377 3 277 311 33 16 266)))
+
+; The double powers of ten 10^0 to 10^38, $DP00 on: those past 10^24 as
+; the source rounds them
+(def %m86-powers
+  (Vector from-list
+    (List map %m86-octal-double
+      (list
+        (list 0 0 0 0 0 0 0 201) (list 0 0 0 0 0 0 40 204) (list 0 0 0 0 0 0 110 207)
+        (list 0 0 0 0 0 0 172 212) (list 0 0 0 0 0 100 34 216) (list 0 0 0 0 0 120 103 221)
+        (list 0 0 0 0 0 44 164 224) (list 0 0 0 0 200 226 30 230) (list 0 0 0 0 40 274 76 233)
+        (list 0 0 0 0 50 153 156 236) (list 0 0 0 0 371 2 25 242) (list 0 0 0 100 267 103 72 245)
+        (list 0 0 0 20 245 324 150 250) (list 0 0 0 52 347 204 21 254) (list 0 0 200 364 40 346 65 257)
+        (list 0 0 240 61 251 137 143 262) (list 0 0 4 277 311 33 16 266) (list 0 0 305 56 274 242 61 271)
+        (list 0 100 166 72 153 13 136 274) (list 0 350 211 4 43 307 12 300) (list 0 142 254 305 353 170 55 303)
+        (list 200 172 27 267 46 327 130 306) (list 220 254 156 62 170 206 7 312) (list 264 127 12 77 26 150 51 315)
+        (list 241 355 314 316 33 302 123 320) (list 205 24 100 141 121 131 4 324) (list 246 31 220 271 245 157 45 327)
+        (list 17 40 364 47 217 313 116 332) (list 12 224 370 170 71 77 1 336) (list 14 271 66 327 7 217 41 341)
+        (list 117 147 4 315 311 362 111 344) (list 43 201 105 100 174 157 174 347) (list 266 160 53 250 255 305 35 353)
+        (list 343 114 66 22 31 67 105 356) (list 34 340 303 126 337 204 166 361) (list 21 154 72 226 13 23 32 365)
+        (list 26 7 311 173 316 227 100 370) (list 333 110 273 32 302 275 160 373) (list 211 15 265 120 231 166 26 377)))))
+
+; $FOTB: by a number's exponent byte, the power of ten $FOTNV scales it by
+; toward 10^6, or 0 when it is there
+(def %m86-fotb
+  (Vector from-list
+    (list
+      38 38 38 38 38 38 38 38  38 38 38 38 38 38 38 38  38 38 38 38 38 38 38 38
+      38 37 37 37 36 36 36 35  35 35 34 34 34 34 33 33  33 32 32 32 31 31 31 31
+      30 30 30 29 29 29 29 28  28 28 27 27 27 26 26 26  25 25 25 25 24 24 24 23
+      23 23 23 22 22 22 22 21  21 21 20 20 20 19 19 19  19 18 18 18 17 17 17 16
+      16 16 16 15 15 15 14 14  14 13 13 13 13 12 12 12  11 11 11 10 10 10 10 9
+      9 9 8 8 8 7 7 7  6 6 6 6 5 5 5 4  4 4 3 3 3 3 2 2
+      2 1 1 1 0 0 0 0  -1 -1 -1 -2 -2 -2 -3 -3  -3 -3 -4 -4 -4 -5 -5 -5
+      -6 -6 -6 -6 -7 -7 -7 -8  -8 -8 -9 -9 -9 -9 -10 -10  -10 -11 -11 -11 -12 -12 -12 -12
+      -13 -13 -13 -14 -14 -14 -15 -15  -15 -15 -16 -16 -16 -17 -17 -17  -18 -18 -18 -18 -19 -19 -19 -20
+      -20 -20 -21 -21 -21 -21 -22 -22  -22 -23 -23 -23 -24 -24 -24 -25  -25 -25 -25 -26 -26 -26 -27 -27
+      -27 -28 -28 -28 -28 -29 -29 -29  -30 -30 -30 -31 -31 -31 -31 -32)))
+
+; V, any kind, times ten to the K (MDPTEN): worked as a double by the
+; table's powers, two divides past 10^-38, and made a single again unless
+; it was a double; ?OV past 10^38
+(def %m86-scale10
+  (fn (_ v k)
+    (let ((kind (first v)) (d (m86->double v)))
+      (let ((r (match
+                 ((int= (%m86-exp d) 0) d)
+                 ((int< 38 k) (%m86-overflow (if (int= kind 8) 8 4) (%m86-neg? d)))
+                 ((not (int< k 0)) (%d-mul d (Vector ref k %m86-powers)))
+                 ((not (int< k -38)) (%d-div d (Vector ref (int- 0 k) %m86-powers)))
+                 ((int< (int+ k 38) -38) (%m86-zero 8))
+                 (#t (%d-div (%d-div d (Vector ref (int- 0 (int+ k 38)) %m86-powers))
+                             (Vector ref 38 %m86-powers))))))
+        (if (int= kind 8) r (%m86-csd r))))))
+
+; --- decimal text out -----------------------------------------------------
+
+(def %m86-digits
+  (fn (_ n)
+    (let ((go (fn (self n acc) (if (int< n 10) (pair (int+ 48 n) acc) (self (int/ n 10) (pair (int+ 48 (int% n 10)) acc))))))
+      (go n ()))))
+
+; Whether the positive V is a whole number
+(def %m86-whole?
+  (fn (_ v)
+    (let ((sh (int- (int+ 128 (%m86-bits (first v))) (%m86-exp v))))
+      (match
+        ((not (int< 0 sh)) #t)
+        ((int< (%m86-bits (first v)) sh) #f)
+        (#t (int= (int& (%m86-mant v) (int- (int<< 1 sh) 1)) 0))))))
+
+; The positive V truncated, an x integer (QINT, $FTDNT)
+(def %m86-trunc
+  (fn (_ v)
+    (let ((sh (int- (int+ 128 (%m86-bits (first v))) (%m86-exp v))))
+      (match
+        ((not (int< 0 sh)) (int<< (%m86-mant v) (int- 0 sh)))
+        ((int< 62 sh) 0)
+        (#t (int>> (%m86-mant v) sh))))))
+
+(def %m86-mul10
+  (fn (_ v) (if (int= (first v) 8) (%d-mul v %m86-ten-double) (%s-mul v %m86-ten-single))))
+
+; Whether V's top 32 bits are under 10^6's as a single ($COMPM)
+(def %m86-below-million?
+  (fn (_ v)
+    (let ((e (%m86-exp v)) (m (if (int= (first v) 8) (int>> (%m86-mant v) 32) (%m86-mant v))))
+      (or (int< e 148) (and (int= e 148) (int< m 16000000))))))
+
+; The positive V scaled so its 7 or 16 printable digits are its whole part
+; ($FOTNV): (V . E), V times ten to the E the number
+(def %m86-fotnv
+  (fn (_ v)
+    (let ((go (fn (self v e)
+                (let ((t (Vector ref (%m86-exp v) %m86-fotb)))
+                  (if (int= t 0) (pair v e) (self (%m86-scale10 v t) (int- e t)))))))
+      (let ((got (let ((got (go v 0)))
+                   (if (%m86-below-million? (first got)) (pair (%m86-mul10 (first got)) (int- (rest got) 1)) got))))
+        (if (int= (first v) 4) got
+          (let ((w (%d-mul (first got) (Vector ref 9 %m86-powers))) (e (int- (rest got) 9)))
+            (if (int< 0 (m86-cmp w %m86-hidbl)) (pair (%d-mul w %m86-tenth) (int+ e 1)) (pair w e))))))))
+
+; The scaled V's digits ($FOTCV): a half added unless it is whole, then
+; its integer part's digits by powers of ten, the first counting past 9
+; when the half carried it to the next power
+(def %m86-fotcv
+  (fn (_ v)
+    (let ((single (int= (first v) 4)))
+      (let ((n (%m86-trunc (if (%m86-whole? v) v
+                             (if single (%s-add v %m86-half-single) (%d-add v %m86-half-double))))))
+        (let ((go (fn (self n k acc)
+                    (if (int< k 0) (List reverse acc)
+                      (let ((p (List fold (fn (_ a i) (int* a 10)) 1 (List range 0 k))))
+                        (self (int% n p) (int- k 1) (pair (int+ 48 (int/ n p)) acc)))))))
+          (go n (if single 6 15) ()))))))
+
+(def %m86-zeros (fn (_ n) (List map (fn (_ i) 48) (List range 0 n))))
+
+; BYTES without trailing zeros, then without a trailing point
+(def %m86-trim
+  (fn (_ bytes)
+    (let ((r (List drop-while (fn (_ b) (int= b 48)) (List reverse bytes))))
+      (List reverse (if (and (not (null? r)) (int= (first r) 46)) (rest r) r)))))
+
+(def %m86-trailing-zeros
+  (fn (_ ds) (int- (List length ds) (List length (List drop-while (fn (_ b) (int= b 48)) (List reverse ds))))))
+
+; DIGITS, the number DIGITS times ten to the E, laid out as $FOFMT lays
+; it: fixed when its digits sit within the 7 or 16 places, E or D notation
+; else, trailing zeros dropped
+(def %m86-layout
+  (fn (_ ds e letter)
+    (let ((n (List length ds)))
+      (let ((fixed (fn (_ p)
+                     (%m86-trim
+                       (if (int< p 0)
+                         (pair 46 (List append (%m86-zeros (int- 0 p)) ds))
+                         (List append (List take p ds) (pair 46 (List drop p ds)))))))
+            (sci (fn (_)
+                   (let ((x (int- (int+ e n) 1)))
+                     (let ((ax (if (int< x 0) (int- 0 x) x)))
+                       (List append (%m86-trim (pair (first ds) (pair 46 (rest ds))))
+                         (list letter (if (int< x 0) 45 43) (int+ 48 (int/ ax 10)) (int+ 48 (int% ax 10)))))))))
+        (match
+          ((int< 0 e) (sci))
+          ((not (int< (int+ e n) 0)) (fixed (int+ e n)))
+          ((int< 0 (int+ (int+ (int+ e n) 1) (%m86-trailing-zeros ds))) (fixed (int+ e n)))
+          (#t (sci)))))))
+
+; V as PRINT and STR$ give it: a sign or a space, then the digits
+(def m86->str
+  (fn (_ v)
+    (if (int= (first v) 2)
+      (let ((n (m86-integer v)))
+        (bytes->str (pair (if (int< n 0) 45 32) (%m86-digits (if (int< n 0) (int- 0 n) n)))))
+      (if (m86-zero? v) " 0"
+        (let ((got (%m86-fotnv (m86-abs v))))
+          (bytes->str
+            (pair (if (%m86-neg? v) 45 32)
+                  (%m86-layout (%m86-fotcv (first got)) (rest got) (if (int= (first v) 8) 68 69)))))))))
+
+; --- decimal text in ------------------------------------------------------
+
+(def %m86-digit? (fn (_ b) (and (not (int< b 48)) (int< b 58))))
+
+; One more digit D on the number read so far ($FIDIG): an integer while it
+; fits, a single to seven digits, then a double
+(def %m86-fidig
+  (fn (_ v d)
+    (match
+      ((int= (first v) 2)
+        (let ((n (m86-integer v)))
+          (let ((t (int+ (int* n 10) d)))
+            (if (and (int< n 3277) (int< t 32768)) (m86-int t) (%m86-fidig (%m86-flt n) d)))))
+      ((int= (first v) 4)
+        (if (%m86-below-million? v) (%s-add (%s-mul v %m86-ten-single) (%m86-flt d))
+          (%m86-fidig (%m86-cds v) d)))
+      (#t (%d-add (%d-mul v %m86-ten-double) (%m86-cds (%m86-flt d)))))))
+
+; &H and &O constants ($OHCNS): (VALUE . END), ?OV past 16 bits
+(def %m86-radix
+  (fn (_ text i)
+    (let ((n (Str8 length text)))
+      (let ((at (fn (_ j) (if (int< j n) (str-byte-ref text j) 0))))
+        (let ((hex (or (int= (at i) 72) (int= (at i) 104))))
+          (let ((start (if (or hex (int= (at i) 79) (int= (at i) 111)) (int+ i 1) i))
+                (base (if hex 16 8)))
+            (let ((dv (fn (_ b)
+                        (match
+                          ((and (not (int< b 48)) (int< b (if hex 58 56))) (int- b 48))
+                          ((and hex (not (int< b 65)) (int< b 71)) (int- b 55))
+                          ((and hex (not (int< b 97)) (int< b 103)) (int- b 87))
+                          (#t -1)))))
+              (let ((go (fn (self j acc count)
+                          (let ((d (dv (at j))))
+                            (if (int< d 0)
+                              (pair (m86-int (if (int< acc 32768) acc (int- acc 65536))) j)
+                              (let ((acc (int+ (int* acc base) d)))
+                                (if (or (int< 65535 acc) (and hex (int< 3 count))) (%m86-ov)
+                                  (self (int+ j 1) acc (int+ count 1)))))))))
+                (go start 0 0)))))))))
+
+; The number at I in TEXT, read as FIN reads it: (VALUE . END), END past
+; the last byte taken.  Blanks are skipped; a sign leads; digits make an
+; integer, a single past 32767 or at a point or E, a double from the eighth
+; digit or at D or #; ! makes a single and % is taken; E and D take an
+; exponent, but not an E that starts ELSE or EQV.
+(def m86-read
+  (fn (_ text i)
+    (let ((n (Str8 length text)))
+      (let ((at (fn (_ j) (if (int< j n) (str-byte-ref text j) 0)))
+            (skip (fn (self j)
+                    (if (and (int< j n) (List includes? (str-byte-ref text j) (list 32 9 10)))
+                      (self (int+ j 1)) j))))
+        (let ((j0 (skip i)))
+          (if (int= (at j0) 38) (%m86-radix text (int+ j0 1))
+            (let ((neg (int= (at j0) 45))
+                  (j1 (skip (if (or (int= (at j0) 45) (int= (at j0) 43)) (int+ j0 1) j0))))
+              ; the number with its exponent K and AFTER digits past the point
+              (let ((fine (fn (_ v k after)
+                            (let ((x (int- k after)))
+                              (if (int= x 0) v (%m86-scale10 v x)))))
+                    (done (fn (_ v)
+                            (let ((v (if neg (m86-neg v) v)))
+                              (if (and (int= (first v) 4) (int= (m86-cmp v (m86-int -32768)) 0))
+                                (m86-int -32768) v)))))
+                ; the exponent after E or D at J: (K . END)
+                (let ((exponent
+                        (fn (_ j)
+                          (let ((j (skip j)))
+                            (let ((sign (match ((int= (at j) 45) -1) ((int= (at j) 43) 1) (#t 0))))
+                              (let ((digits (fn (self j acc)
+                                              (if (%m86-digit? (at j))
+                                                (self (skip (int+ j 1))
+                                                      (if (int< acc 3276) (int+ (int* acc 10) (int- (at j) 48)) 32767))
+                                                (pair acc j)))))
+                                (let ((got (digits (if (int= sign 0) j (skip (int+ j 1))) 0)))
+                                  (pair (if (int< sign 0) (int- 0 (first got)) (first got)) (rest got)))))))))
+                  (let ((go (fn (self j v point after)
+                              (let ((c (at j)))
+                                (match
+                                  ((%m86-digit? c)
+                                    (self (skip (int+ j 1)) (%m86-fidig v (int- c 48)) point (if point (int+ after 1) after)))
+                                  ((int= c 46)
+                                    (if point (pair (done (fine v 0 after)) j)
+                                      (self (skip (int+ j 1)) (if (int= (first v) 2) (%m86-flt (m86-integer v)) v) #t after)))
+                                  ((or (int= c 69) (int= c 101))
+                                    (if (List includes? (at (skip (int+ j 1))) (list 76 108 81 113))
+                                      (pair (done (fine v 0 after)) j)
+                                      (let ((got (exponent (int+ j 1))))
+                                        (pair (done (fine (if (int= (first v) 8) v (m86->single v)) (first got) after)) (rest got)))))
+                                  ((or (int= c 68) (int= c 100))
+                                    (let ((got (exponent (int+ j 1))))
+                                      (pair (done (fine (m86->double v) (first got) after)) (rest got))))
+                                  ((int= c 37) (pair (done (fine v 0 after)) (int+ j 1)))
+                                  ((int= c 35) (pair (done (fine (m86->double v) 0 after)) (int+ j 1)))
+                                  ((int= c 33) (pair (done (fine (m86->single v) 0 after)) (int+ j 1)))
+                                  (#t (pair (done (fine v 0 after)) j)))))))
+                    (go j1 (m86-int 0) #f 0)))))))))))
+
+(provide basic/mbf86
+  m86-int m86-kind m86-integer m86-zero? m86-infinity m86->single m86->double m86-cint m86-floor
+  m86-neg m86-abs m86-sgn m86-add m86-sub m86-mul m86-div m86-idiv m86-mod m86-cmp
+  m86->bytes m86-from-bytes m86->str m86-read)

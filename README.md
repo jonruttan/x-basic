@@ -82,6 +82,14 @@ The 6502 dialect (`lib/basic/m6502.x`):
 - **Errors.** Two-letter, as the KIM build prints them:
   `?SN ERROR IN  20`.
 
+GW-BASIC, from Microsoft's MIT-licensed 8086 source
+([microsoft/GW-BASIC](https://github.com/microsoft/GW-BASIC)), is under
+way. Its numbers are in (`lib/basic/mbf86.x`): 16-bit integers that become
+singles when they will not fit, four-byte singles and eight-byte doubles,
+added, multiplied and divided as MATH1.ASM and MATH2.ASM do it, read as
+FIN reads a constant and printed as FOUT prints one. The dialect itself,
+its statements and its prompt, is not yet.
+
 A
 program run from a file (`x -l basic -f FILE`) or piped in waits on a
 line reader in x-lang.
