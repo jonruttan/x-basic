@@ -84,11 +84,33 @@ The 6502 dialect (`lib/basic/m6502.x`):
 
 GW-BASIC, from Microsoft's MIT-licensed 8086 source
 ([microsoft/GW-BASIC](https://github.com/microsoft/GW-BASIC)), is under
-way. Its numbers are in (`lib/basic/mbf86.x`): 16-bit integers that become
-singles when they will not fit, four-byte singles and eight-byte doubles,
-added, multiplied and divided as MATH1.ASM and MATH2.ASM do it, read as
-FIN reads a constant and printed as FOUT prints one. The dialect itself,
-its statements and its prompt, is not yet.
+way (`lib/basic/gwbasic.x`), run by the same machine with
+`X_BASIC_DIALECT=gw`:
+
+- **Numbers.** `lib/basic/mbf86.x`: 16-bit integers that become singles
+  when they will not fit, four-byte singles and eight-byte doubles,
+  added, multiplied and divided as MATH1.ASM and MATH2.ASM do it, read as
+  FIN reads a constant and printed as FOUT prints one. `\`, `MOD`, `XOR`,
+  `EQV` and `IMP`; `CINT`, `CSNG`, `CDBL` and `FIX`. An overflow or a
+  division by zero in arithmetic prints its message and goes on with the
+  largest number, as the 8086 does.
+- **Lines.** The 8086's tokens. A reserved word is taken only where a
+  name could not go on, so `FORI` is a name and `FOR I` a loop; `'`
+  starts a remark. Names keep 40 characters and a `$`, `%`, `!` or `#`;
+  one without a sign is a single.
+- **Memory.** Variables laid out as the 8086 lays them out: VALTYP, the
+  name, then two, three, four or eight bytes of value. The program from
+  $1000 and memory to 512 bytes under 64K (the build decides both), so
+  60926 bytes free.
+- **Messages.** The copyright line and the bytes free at start-up, `Ok`,
+  and the long messages: `Undefined line number in 10`.
+
+The statements are the 6502's for now. Those it does not run, and the
+words the KIM runs that mean another thing here (`SAVE`, `LOAD`, `GET`,
+`WAIT`), print `SAVE is not in x-basic yet`. Not yet: `^` and the
+transcendental functions, `ELSE`, `GO TO` with a blank, DEF FN's memory
+entries, LIST of the crunched text, and the line editor after a syntax
+error.
 
 A
 program run from a file (`x -l basic -f FILE`) or piped in waits on a
