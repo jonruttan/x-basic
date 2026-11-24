@@ -6,7 +6,7 @@
 ; and nothing here needs a socket or a process.
 (dialect he)
 
-(requires-release "v0.60.0")
+(requires-release "v0.62.0")
 
 ; `x -l basic` boots the module basic/run.
 (entry run)
