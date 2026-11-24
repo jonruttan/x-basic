@@ -47,7 +47,7 @@ The 6502 dialect (`lib/basic/m6502.x`):
   KIM's does. A `WAIT` that does not hold at once waits for ever: only
   the program writes the memory it watches.
 - **Functions.** `SGN INT ABS LEN STR$ VAL ASC CHR$ LEFT$ RIGHT$ MID$
-  POS FRE PEEK`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
+  POS FRE PEEK USR`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
   `EXP(Y*LOG(X))`, step for step from the source's tables
   (`lib/basic/mbf-math.x`).
 - **Start-up.** `MEMORY SIZE?` and `WIDTH?`, as the KIM build's INIT
@@ -70,10 +70,19 @@ The 6502 dialect (`lib/basic/m6502.x`):
   `LOADED` and reads the next line with no `OK`, as the KIM build does. A
   tape that cannot be read or written shows `FFFF`, the monitor's error
   display, and the program is kept.
+- **USR.** A 6502 runs machine code in the image (`lib/basic/cpu.x`):
+  the NMOS part's documented instructions, decimal mode included.
+  `USR(X)` puts X in the floating accumulator in page zero ($B1-$B6,
+  FACOV $C0) and calls through USRPOK, the JMP at $0A, its address at
+  $0B and $0C; INIT points it at FCERR, so `USR` is `?FC` until a program
+  `POKE`s an address there. AYINT ($2FC2) and GIVAYF ($3195), at $06 and
+  $08, run as BASIC's own routines; their addresses are those of the
+  KIM BASIC that shipped. Page zero holds only these and the FAC; BRK
+  or an undocumented opcode stops the routine.
 - **Errors.** Two-letter, as the KIM build prints them:
   `?SN ERROR IN  20`.
 
-Not yet: `USR`. A
+A
 program run from a file (`x -l basic -f FILE`) or piped in waits on a
 line reader in x-lang.
 

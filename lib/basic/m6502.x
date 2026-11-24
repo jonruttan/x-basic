@@ -45,6 +45,20 @@
       ; WIDTH, not TERMINAL WIDTH, and no WANT SIN-COS-TAN-ATN)
       (lit memory-prompt) "MEMORY SIZE"
       (lit width-prompt) "WIDTH"
-      (lit banner) (list "KIM BASIC V1.1" "COPYRIGHT 1978 MICROSOFT"))))
+      (lit banner) (list "KIM BASIC V1.1" "COPYRIGHT 1978 MICROSOFT")
+      ; USR: page zero as the ROMSW build lays it out (START, RDYJSR,
+      ; ADRAYI, ADRGAY, then USRPOK's JMP, which INIT points at FCERR;
+      ; VALTYP; the FAC's FACEXP FACHO FACMOH FACMO FACLO FACSGN, and
+      ; FACOV), and the ROM routines' addresses in the KIM BASIC that
+      ; shipped (FCERR, AYINT, GIVAYF), where a program reaches them
+      (lit adrayi) 6
+      (lit adrgay) 8
+      (lit usrpok) 10
+      (lit valtyp) 17
+      (lit fac) 177
+      (lit facov) 192
+      (lit fcerr) 12363
+      (lit ayint) 12226
+      (lit givayf) 12693)))
 
 (provide basic/m6502 m6502-dialect)
