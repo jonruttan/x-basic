@@ -21,9 +21,12 @@
 (import x/core/doors int+ int- int< int= int>> int& int| str-byte-ref)
 (import x/type/str)
 (import basic/mbf86
-  m86-int m86-integer m86-zero? m86-infinity m86->single m86->double m86-cint m86-floor
+  m86-int m86-integer m86-zero? m86->single m86->double m86-cint m86-floor
   m86-neg m86-abs m86-sgn m86-add m86-sub m86-mul m86-div m86-idiv m86-mod m86-cmp
   m86->bytes m86-from-bytes m86->str m86-read)
+(import basic/mbf86-math
+  m86-sqr m86-log m86-exp m86-sin m86-cos m86-tan m86-atn m86-power
+  m86-rnd m86-rnd-seed m86-randomize)
 
 ; Each reserved word and the bytes CRUNCH stores it as: one byte, or $FD,
 ; $FE or $FF and one more
@@ -106,9 +109,9 @@
       (lit floor) m86-floor
       ; an integer by CINT, ?OV outside a word
       (lit integer) (fn (_ v) (m86-integer (m86-cint v)))
+      (lit power) m86-power
       (lit ->str) m86->str
       (lit read) m86-read
-      (lit infinity) m86-infinity
       ; FRE's count, a single (m86->single floats an integer of any size)
       (lit fre) (fn (_ n) (m86->single (m86-int n)))
       ; a value as a variable of TYPE holds it: CINT, CSNG or CDBL
@@ -117,7 +120,15 @@
           (match ((int= type 2) (m86-cint v)) ((int= type 8) (m86->double v)) (#t (m86->single v))))
       (lit ->bytes) (fn (_ type v) (m86->bytes v))
       (lit from-bytes) m86-from-bytes
-      (lit math) (Dict make))))
+      (lit math)
+        (Dict from-plist
+          (list "SQR" m86-sqr "LOG" m86-log "EXP" m86-exp "SIN" m86-sin "COS" m86-cos
+                "TAN" m86-tan "ATN" m86-atn))
+      (lit rnd) m86-rnd
+      (lit rnd-seed) m86-rnd-seed
+      ; CLEAR and RUN put RNDCOP back in RNDX
+      (lit rnd-clear) #t
+      (lit randomize) m86-randomize)))
 
 ; A variable is VALTYP, the name's first two characters (the second 0 when
 ; there is none), the count of those past them and each of those with its
@@ -167,6 +178,8 @@
       ; nothing after them, and a word ending "(" ends there
       (lit crunch) (lit name-start)
       (lit prefix-words) (list "FN" "USR")
+      ; RND with no argument is RND(1)
+      (lit bare-calls) (list "RND")
       ; CRUNCH puts a colon before ELSE
       (lit colon-before) (list "ELSE")
       ; FIN reads a constant from the text as typed
@@ -191,6 +204,8 @@
       (lit in-text) " in "
       (lit break-text) "Break"
       (lit redo-text) "?Redo from start"
+      ; RANDOMIZE with no formula asks for the seed (RANMES)
+      (lit seed-text) "Random number seed (-32768 to 32767)"
       ; items past the variables are a reason to ask again
       (lit extra-text) ()
       (lit free-text) " Bytes free"

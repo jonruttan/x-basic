@@ -27,7 +27,8 @@
 ;
 ; Where the 8086 BASIC prints "Overflow" or "Division by zero" and goes on
 ; with the largest number, these raise 'basic-overflow or 'basic-div0, the
-; text the kind and sign ("4+", "8-"): m86-infinity gives that number.  An
+; text the kind and sign ("4+", "8-") and that number the value in its
+; data (m86-raise).  An
 ; integer that will not fit is ?OV, 'basic "OV", as FRCINT's error is.
 
 (module basic/mbf86)
@@ -69,15 +70,19 @@
 (def %m86-sign-text
   (fn (_ k neg) (Str8 append (if (int= k 8) "8" "4") (if neg "-" "+"))))
 
-(def %m86-overflow (fn (_ k neg) (Err raise (lit basic-overflow) (%m86-sign-text k neg))))
-(def %m86-div0 (fn (_ k neg) (Err raise (lit basic-div0) (%m86-sign-text k neg))))
-(def %m86-ov (fn (_) (Err raise (lit basic) "OV")))
-
-; The largest number of the kind and sign TEXT names, as DOINF gives it
+; The largest number of kind K and sign NEG, as DOINF gives it
 (def m86-infinity
-  (fn (_ text)
-    (let ((k (if (str=? (Str8 sub 0 1 text) "8") 8 4)))
-      (list k (str=? (Str8 sub 1 1 text) "-") 255 (if (int= k 8) %m86-mask56 (int- %m86-two24 1))))))
+  (fn (_ k neg) (list k neg 255 (if (int= k 8) %m86-mask56 (int- %m86-two24 1)))))
+
+; The overflow or the division by zero LABEL raised with V, the number the
+; BASIC goes on with, as its value
+(def m86-raise
+  (fn (_ label v)
+    (Err raise label (%m86-sign-text (first v) (%m86-neg? v)) (list (pair (lit value) v)))))
+
+(def %m86-overflow (fn (_ k neg) (m86-raise (lit basic-overflow) (m86-infinity k neg))))
+(def %m86-div0 (fn (_ k neg) (m86-raise (lit basic-div0) (m86-infinity k neg))))
+(def %m86-ov (fn (_) (Err raise (lit basic) "OV")))
 
 ; --- single precision -----------------------------------------------------
 
@@ -848,6 +853,6 @@
                     (go j1 (m86-int 0) #f 0)))))))))))
 
 (provide basic/mbf86
-  m86-int m86-kind m86-integer m86-zero? m86-infinity m86->single m86->double m86-cint m86-floor
+  m86-int m86-kind m86-integer m86-zero? m86-infinity m86-raise m86->single m86->double m86-cint m86-floor
   m86-neg m86-abs m86-sgn m86-add m86-sub m86-mul m86-div m86-idiv m86-mod m86-cmp
   m86->bytes m86-from-bytes m86->str m86-read)

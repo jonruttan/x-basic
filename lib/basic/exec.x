@@ -25,8 +25,8 @@
 ; An error is (Err raise 'basic CODE), CODE the 6502's two letters, which
 ; the dialect prints its way.  A statement this bundle does not run yet
 ; raises 'basic-todo with its word.  A kit may raise 'basic-overflow or
-; 'basic-div0 where its BASIC prints the error and goes on with the
-; largest number, the text the kind and sign that kit's infinity takes.
+; 'basic-div0 where its BASIC prints the error and goes on, the number it
+; goes on with the raise's value.
 
 (module basic/exec)
 (import x/type/list)
@@ -34,6 +34,7 @@
 (import x/type/dict)
 (import x/type/vector)
 (import x/type/err)
+(import x/type/assoc)
 (import x/core/doors int+ int- int* int/ int% int< int= int<< int>> int& int| str-byte-ref)
 (import basic/mbf mbf-zero mbf-int mbf-sgn mbf-cmp mbf-floor mbf->int mbf-exponent mbf-mantissa mbf-fac)
 (import basic/lex basic-lex basic-fold basic-crunch basic-detokenize)
@@ -78,7 +79,8 @@
       ; memory up to the dialect's top of RAM, as a blank MEMORY SIZE? finds
       (m set! (lit mem) (mem-make (m get (lit layout)) (dialect get (lit txttab)) (dialect get (lit ram-top))))
       (m set! (lit lines) ())
-      ; RND's last value; CLEAR and RUN leave it
+      ; RND's last value; CLEAR and RUN leave it unless the kit says they
+      ; put the seed back
       (m set! (lit rnd) ((m get (lit numbers)) get-or () (lit rnd-seed)))
       ; the file SAVE writes a cassette record to and LOAD reads one from
       (m set! (lit tape) "basic.tape")
@@ -131,6 +133,8 @@
     (m set! (lit deftbl) (Vector make 26 (%bx-dialect m (lit default-type))))
     (m set! (lit base) 0)
     (m set! (lit option) #f)
+    (when ((m get (lit numbers)) get-or #f (lit rnd-clear))
+      (m set! (lit rnd) (%bx-kit m (lit rnd-seed))))
     (%bx-restore! m)))
 
 ; The program as a vector, each line number's place in it, and each line's
@@ -458,21 +462,25 @@
 (def %bx-signed
   (fn (_ w) (if (int< w 32768) w (int- w 65536))))
 
-; The kit's operation KEY on A and B.  Where the kit raises the overflow
-; or the division by zero its BASIC goes on from, the error is printed
-; where the cursor is, a new line begun, and the answer is the largest
-; number of that kind and sign.
+; What THUNK answers.  Where the kit raises the overflow or the division
+; by zero its BASIC goes on from, the error is printed where the cursor
+; is, a new line begun, and the answer is the number the raise carries.
+(def %bx-soft
+  (fn (_ m thunk)
+    (guard (e (let ((label (Err label e)))
+                (if (or (eq? label (lit basic-overflow)) (eq? label (lit basic-div0)))
+                  (do (%bx-out m ((%bx-dialect m (lit error-text)) (if (eq? label (lit basic-div0)) "/0" "OV")))
+                      (%bx-newline m)
+                      (Assoc get (lit value) (e data)))
+                  (error e))))
+      (thunk))))
+
+; The kit's operation KEY on A and B
 (def %bx-arith
   (fn (_ m key a b)
     (let ((op (%bx-kit m key)))
       (when (null? op) (%bx-todo (if (eq? key (lit power)) "^" (Str8 str key))))
-      (guard (e (let ((label (Err label e)))
-                  (if (or (eq? label (lit basic-overflow)) (eq? label (lit basic-div0)))
-                    (do (%bx-out m ((%bx-dialect m (lit error-text)) (if (eq? label (lit basic-div0)) "/0" "OV")))
-                        (%bx-newline m)
-                        ((%bx-kit m (lit infinity)) (Err text e)))
-                    (error e))))
-        (op a b)))))
+      (%bx-soft m (fn (_) (op a b))))))
 
 ; A and B as 16-bit words, joined by F, the answer an integer
 (def %bx-logic
@@ -588,7 +596,7 @@
 
 (def %bx-call
   (fn (_ m word args)
-    (let ((a (first args)))
+    (let ((a (if (null? args) () (first args))))
       (match
         ((str=? word "SGN") (%bx-int m ((%bx-kit m (lit sign)) (%bx-number a))))
         ((str=? word "INT") ((%bx-kit m (lit floor)) (%bx-number a)))
@@ -620,14 +628,15 @@
               ((%bx-kit m (lit fre)) (mem-free (%bx-mem m)))))
         ((str=? word "PEEK") (%bx-int m (mem-peek (%bx-mem m) (%bx-address m a))))
         ((str=? word "USR") (%bx-usr m a))
+        ; RND with no argument is RND(1) (RNDMON)
         ((str=? word "RND")
           (let ((rnd (%bx-kit m (lit rnd))))
             (when (null? rnd) (%bx-todo word))
-            (let ((got (rnd (%bx-number a) (m get (lit rnd)))))
+            (let ((got (rnd (if (null? args) (%bx-int m 1) (%bx-number a)) (m get (lit rnd)))))
               (do (m set! (lit rnd) (rest got)) (first got)))))
         (#t
           (let ((f ((%bx-kit m (lit math)) get-or () word)))
-            (if (null? f) (%bx-todo word) (f (%bx-number a)))))))))
+            (if (null? f) (%bx-todo word) (%bx-soft m (fn (_) (f (%bx-number a)))))))))))
 
 ; FN NAME of the argument E (FNDOER): the argument taken, ?UF when NAME has
 ; no DEF, then the formula read with its argument's variable set to it,
@@ -798,6 +807,25 @@
               (do (%bx-out m (%bx-dialect m (lit redo-text))) (%bx-newline m)
                   (%bx-input m prompt targets))
               r)))))))
+
+; RANDOMIZE: the seed from the formula E, or asked for until a number alone
+; is typed, made an integer and given to the kit (RANDOM, STRNDS).  An
+; empty reply is 0; none at all ends the program.
+(def %bx-randomize
+  (fn (_ m e)
+    (let ((f (%bx-kit m (lit randomize))))
+      (when (null? f) (%bx-todo "RANDOMIZE"))
+      (let ((ask (fn (self)
+                   (let ((reply (%bx-reply m (Str8 append (%bx-dialect m (lit seed-text)) "? "))))
+                     (if (null? reply) ()
+                       (let ((text (Str8 trim reply)))
+                         (if (= (Str8 length text) 0) (%bx-kit m (lit zero))
+                           (let ((got (%bx-value m text)))
+                             (if (or (null? got) (not (null? (rest got)))) (self) (first got))))))))))
+        (let ((n (if (null? e) (ask) (%bx-number (%bx-eval m e)))))
+          (if (null? n) (lit end)
+            (do (m set! (lit rnd) (f ((%bx-kit m (lit integer)) n) (m get (lit rnd))))
+                ())))))))
 
 ; --- LIST -----------------------------------------------------------------
 
@@ -1239,6 +1267,7 @@
           (if (int< index 0) (%bx-fail "ID") (%bx-input m (List second st) (List third st))))
         ((eq? tag (lit get))
           (if (int< index 0) (%bx-fail "ID") (%bx-get-keys m (List second st))))
+        ((eq? tag (lit randomize)) (%bx-randomize m (List second st)))
         ((eq? tag (lit run)) (%bx-run-statement m st))
         ((eq? tag (lit new)) (%bx-new m))
         ((eq? tag (lit save)) (%bx-save m))
