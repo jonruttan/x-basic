@@ -104,13 +104,16 @@ way (`lib/basic/gwbasic.x`), run by the same machine with
   60926 bytes free.
 - **Messages.** The copyright line and the bytes free at start-up, `Ok`,
   and the long messages: `Undefined line number in 10`.
+- **Statements.** The 6502's, and `IF ... THEN ... ELSE` (each IF
+  between needing an ELSE of its own), `WHILE` and `WEND`, `DEFINT`,
+  `DEFSNG`, `DEFDBL` and `DEFSTR` (set back by `CLEAR` and `RUN`),
+  `SWAP`, `ERASE` and `OPTION BASE`.
 
-The statements are the 6502's for now. Those it does not run, and the
-words the KIM runs that mean another thing here (`SAVE`, `LOAD`, `GET`,
-`WAIT`), print `SAVE is not in x-basic yet`. Not yet: `^` and the
-transcendental functions, `ELSE`, `GO TO` with a blank, DEF FN's memory
-entries, LIST of the crunched text, and the line editor after a syntax
-error.
+Those it does not run, and the words the KIM runs that mean another thing
+here (`SAVE`, `LOAD`, `GET`, `WAIT`), print `SAVE is not in x-basic yet`.
+Not yet: `^` and the transcendental functions, `GO TO` with a blank, DEF
+FN's memory entries, LIST of the crunched text, and the line editor after
+a syntax error.
 
 A
 program run from a file (`x -l basic -f FILE`) or piped in waits on a
