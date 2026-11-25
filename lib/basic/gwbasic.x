@@ -153,7 +153,8 @@
       "FC" "Illegal function call" "OV" "Overflow" "OM" "Out of memory" "US" "Undefined line number"
       "BS" "Subscript out of range" "DD" "Duplicate Definition" "/0" "Division by zero"
       "ID" "Illegal direct" "TM" "Type mismatch" "OS" "Out of string space" "LS" "String too long"
-      "ST" "String formula too complex" "CN" "Can't continue" "UF" "Undefined user function")))
+      "ST" "String formula too complex" "CN" "Can't continue" "UF" "Undefined user function"
+      "WH" "WHILE without WEND" "WE" "WEND without WHILE")))
 
 (def gwbasic-dialect
   (Dict from-plist

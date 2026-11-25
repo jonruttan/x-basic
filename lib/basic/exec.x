@@ -42,7 +42,7 @@
 (import basic/parse basic-parse-line basic-parse-value basic-items)
 (import basic/mem
   mem-peek mem-poke! mem-word mem-word! mem-write! mem-read mem-make mem-at mem-clear! mem-string!
-  mem-free mem-program! mem-var mem-var! mem-array-new! mem-element)
+  mem-free mem-program! mem-var mem-var! mem-array-new! mem-array-erase! mem-element)
 
 (def %bx-fail (fn (_ code) (Err raise (lit basic) code)))
 (def %bx-todo (fn (_ word) (Err raise (lit basic-todo) word)))
@@ -70,8 +70,6 @@
       (m set! (lit nulls) 0)
       ; whether a typed line is upper-cased outside its strings, REM and DATA
       (m set! (lit fold-case) (dialect get-or #t (lit fold-case)))
-      ; each letter's type for a name with no sign (DEFTBL)
-      (m set! (lit deftbl) (Vector make 26 (dialect get (lit default-type))))
       ; the line's width and the column past which a comma starts a new
       ; line (LINWID, NCMWID)
       (%bx-width! m (dialect get (lit width))
@@ -128,6 +126,11 @@
     (m set! (lit fns) (Dict make))
     (m set! (lit stack) ())
     (m set! (lit cont) ())
+    ; each letter's type for a name with no sign (DEFTBL), and the lowest
+    ; subscript (OPTVAL), with whether OPTION BASE has set it (OPTFLG)
+    (m set! (lit deftbl) (Vector make 26 (%bx-dialect m (lit default-type))))
+    (m set! (lit base) 0)
+    (m set! (lit option) #f)
     (%bx-restore! m)))
 
 ; The program as a vector, each line number's place in it, and each line's
@@ -402,9 +405,15 @@
       (unless (arrays has? key)
         (arrays set! key
           (%bx-array-make m name
-            (List map (fn (_ i) (int- (%bx-dialect m (lit array-size)) 1))
+            (List map (fn (_ i) (int- (int- (%bx-dialect m (lit array-size)) 1) (m get (lit base))))
                       (List range 0 count)))))
       (arrays get key))))
+
+; The subscript V less the lowest, ?BS for one below it (LNGNAM)
+(def %bx-subscript
+  (fn (_ m v)
+    (let ((i (%bx-int-in m v 0 32767)) (base (m get (lit base))))
+      (if (int< i base) (%bx-fail "BS") (int- i base)))))
 
 ; The element of SUBSCRIPTS in the array A, counted with the first
 ; subscript fastest (GETDEF)
@@ -413,7 +422,7 @@
     (unless (int= (List length subscripts) (List length (first a))) (%bx-fail "BS"))
     (List fold
       (fn (_ at pr)
-        (let ((i (%bx-int-in m (rest pr) 0 32767)))
+        (let ((i (%bx-subscript m (rest pr))))
           (when (int< (first pr) i) (%bx-fail "BS"))
           (int+ (int* at (int+ (first pr) 1)) i)))
       0 (List reverse (List zip (first a) subscripts)))))
@@ -865,7 +874,7 @@
           (when (arrays has? key) (%bx-fail "DD"))
           (arrays set! key
             (%bx-array-make m (first d)
-              (List map (fn (_ e) (%bx-int-in m (%bx-eval m e) 0 32767)) (rest d))))))
+              (List map (fn (_ e) (%bx-subscript m (%bx-eval m e))) (rest d))))))
       decls)))
 
 ; DEF FN NAME(ARG)=FORMULA: ?TM for a string name or argument, ?ID typed
@@ -967,6 +976,10 @@
       ((eq? tag (lit null)) (%bx-null m (List second st)))
       ((eq? tag (lit poke)) (%bx-poke m (List second st) (List third st)))
       ((eq? tag (lit wait)) (%bx-wait m (List second st) (List third st) (List ref 3 st)))
+      ((eq? tag (lit deftype)) (%bx-deftype m (List second st) (List third st)))
+      ((eq? tag (lit swap)) (%bx-swap m (List second st) (List third st)))
+      ((eq? tag (lit erase)) (%bx-erase m (List second st)))
+      ((eq? tag (lit option)) (%bx-option m (List second st)))
       ((eq? tag (lit bad)) (%bx-fail (List second st)))
       (#t (%bx-todo (List second st))))))
 
@@ -1059,6 +1072,149 @@
     (let ((at (m get (lit cont))))
       (if (or (int< -1 index) (null? at)) (%bx-fail "CN") at))))
 
+; --- ELSE, WHILE and WEND -------------------------------------------------
+
+; Where a false IF goes on (FALSIF): past the ELSE that matches it among
+; the statements AFTER it on line INDEX, each IF between needing an ELSE
+; of its own; the next line when there is none
+(def %bx-else-of
+  (fn (_ index after)
+    (let ((go (fn (self sts k)
+                (match
+                  ((null? sts) (lit next-line))
+                  ((eq? (first (first sts)) (lit if)) (self (rest sts) (int+ k 1)))
+                  ((eq? (first (first sts)) (lit else))
+                    (if (int= k 1) (pair index (rest sts)) (self (rest sts) (int- k 1))))
+                  (#t (self (rest sts) k))))))
+      (go after 1))))
+
+; Where the WEND that closes a WHILE is (WNDSCN): the position past it,
+; found from the statements AFTER the WHILE on line INDEX through the
+; lines after, each WHILE between needing a WEND of its own; ?WH when the
+; program ends first
+(def %bx-wend-of
+  (fn (_ m index after)
+    (let ((go (fn (self i sts k)
+                (match
+                  ((null? sts)
+                    (let ((next (%bx-after-line m i)))
+                      (if (null? next) (%bx-fail "WH") (self (first next) (rest next) k))))
+                  ((eq? (first (first sts)) (lit while)) (self i (rest sts) (int+ k 1)))
+                  ((eq? (first (first sts)) (lit wend))
+                    (if (int= k 1) (pair i (rest sts)) (self i (rest sts) (int- k 1))))
+                  (#t (self i (rest sts) k))))))
+      (go index after 1))))
+
+; A WEND by where it is: its line's place and how many statements follow it
+(def %bx-wend-key (fn (_ index after) (pair index (List length after))))
+
+; The stack from the WHILE entry for the WEND at KEY (FNDWND), FOR entries
+; passed over; nil when a GOSUB's or the stack's end comes first
+(def %bx-find-while
+  (fn (_ stack key)
+    (let ((go (fn (self s)
+                (match
+                  ((null? s) ())
+                  ((eq? (first (first s)) (lit for)) (self (rest s)))
+                  ((eq? (first (first s)) (lit while))
+                    (let ((k (List second (first s))))
+                      (if (and (int= (first k) (first key)) (int= (rest k) (rest key))) s (self (rest s)))))
+                  (#t ())))))
+      (go stack))))
+
+(def %bx-holds? (fn (_ m e) (not ((%bx-kit m (lit zero?)) (%bx-number (%bx-eval m e))))))
+
+; WHILE E: the stack's entry for this loop, and those above it, dropped;
+; then the loop entered when E holds, else gone on past its WEND
+(def %bx-while
+  (fn (_ m st index after)
+    (let ((past (%bx-wend-of m index after)))
+      (let ((key (%bx-wend-key (first past) (rest past))))
+        (let ((s (%bx-find-while (m get (lit stack)) key)))
+          (unless (null? s) (m set! (lit stack) (rest s))))
+        (if (not (%bx-holds? m (List second st))) past
+          (do (m set! (lit stack) (pair (list (lit while) key (List second st) (pair index after)) (m get (lit stack))))
+              ()))))))
+
+; WEND: ?WE with no WHILE for it; else the stack cut to that WHILE's entry
+; and its formula read again on the WHILE's line, the loop going round
+; when it holds and on past the WEND when it does not
+(def %bx-wend
+  (fn (_ m index after)
+    (let ((s (%bx-find-while (m get (lit stack)) (%bx-wend-key index after))))
+      (when (null? s) (%bx-fail "WE"))
+      (let ((e (first s)))
+        (let ((at (List ref 3 e)))
+          (m set! (lit stack) s)
+          (m set! (lit index) (first at))
+          (m set! (lit line) (if (int< (first at) 0) () (first (%bx-line-ref m (first at)))))
+          (if (%bx-holds? m (List third e)) at
+            (do (m set! (lit stack) (rest s)) (pair index after))))))))
+
+; --- DEFINT, SWAP, ERASE and OPTION BASE ---------------------------------
+
+; DEFINT and its kin: each letter of RANGES given TYPE in DEFTBL
+(def %bx-deftype
+  (fn (_ m type ranges)
+    (List for-each
+      (fn (_ r)
+        (List for-each (fn (_ i) (Vector set! i type (m get (lit deftbl))))
+          (List range (first r) (int+ (rest r) 1))))
+      ranges)))
+
+; Where TARGET's value is, its variable made when it has none (PTRGET)
+(def %bx-target-at
+  (fn (_ m target)
+    (let ((name (List second target)))
+      (if (eq? (first target) (lit var)) (%bx-var-at! m name)
+        (let ((args (List map (fn (_ e) (%bx-eval m e)) (List third target))))
+          (let ((a (%bx-array m name (List length args))))
+            (%bx-element-at m name a (%bx-slot m a args))))))))
+
+; SWAP A, B: the two values' bytes traded.  ?TM when their types differ;
+; ?FC when finding B made a variable, which moves the arrays A may be in
+(def %bx-swap
+  (fn (_ m a b)
+    (let ((mem (%bx-mem m)) (na (List second a)) (nb (List second b)))
+      (let ((at-a (%bx-target-at m a)) (arytab (mem-at mem (lit arytab))))
+        (let ((at-b (%bx-target-at m b)))
+          (unless (int= (%bx-type m na) (%bx-type m nb)) (%bx-fail "TM"))
+          (unless (int= arytab (mem-at mem (lit arytab))) (%bx-fail "FC"))
+          (let ((n (%bx-element-size m na)))
+            (let ((va (mem-read mem at-a n)) (vb (mem-read mem at-b n)))
+              (mem-write! mem at-a vb)
+              (mem-write! mem at-b va))))))))
+
+; ERASE NAMES: each array taken out of memory, the arrays past it moved
+; down; ?FC for one there is none of
+(def %bx-erase
+  (fn (_ m names)
+    (List for-each
+      (fn (_ name)
+        (let ((arrays (m get (lit arrays))) (key (%bx-key m name)) (mem (%bx-mem m)))
+          (unless (arrays has? key) (%bx-fail "FC"))
+          (let ((offset (List second (arrays get key))))
+            (let ((n (mem-array-erase! mem (int+ (mem-at mem (lit arytab)) offset))))
+              (arrays del! key)
+              (List for-each
+                (fn (_ k)
+                  (let ((e (arrays get k)))
+                    (when (int< offset (List second e))
+                      (arrays set! k (list (first e) (int- (List second e) n))))))
+                (arrays keys))))))
+      names)))
+
+; OPTION BASE N: the lowest subscript.  The same base again does nothing;
+; another is ?DD once OPTION BASE has set one or an array is made
+(def %bx-option
+  (fn (_ m n)
+    (let ((mem (%bx-mem m)))
+      (unless (int= n (m get (lit base)))
+        (when (or (m get (lit option)) (not (int= (mem-at mem (lit arytab)) (mem-at mem (lit strend)))))
+          (%bx-fail "DD"))
+        (m set! (lit base) n)
+        (m set! (lit option) #t)))))
+
 ; Statement ST, run with the statements AFTER it on line INDEX
 (def %bx-statement
   (fn (_ m st index after)
@@ -1070,7 +1226,10 @@
             (do (%bx-push-return! m index after) to)))
         ((eq? tag (lit return)) (%bx-return m))
         ((eq? tag (lit if))
-          (if ((%bx-kit m (lit zero?)) (%bx-number (%bx-eval m (List second st)))) (lit next-line) ()))
+          (if (%bx-holds? m (List second st)) () (%bx-else-of index after)))
+        ((eq? tag (lit else)) (lit next-line))
+        ((eq? tag (lit while)) (%bx-while m st index after))
+        ((eq? tag (lit wend)) (%bx-wend m index after))
         ((eq? tag (lit for)) (%bx-for m st index after))
         ((eq? tag (lit next)) (%bx-next m (List second st)))
         ((eq? tag (lit end)) (lit end))

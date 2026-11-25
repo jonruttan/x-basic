@@ -64,11 +64,11 @@
 ; Whether TS starts a name: a name token, or a letter
 (def %bp-name? (fn (_ ts) (or (and (not (null? ts)) (eq? (first (first ts)) (lit name))) (%bp-letter? (%bp-byte ts)))))
 
-; Whether TS is at the end of a statement: a colon, or a ' remark, which
-; CRUNCH stores after one
+; Whether TS is at the end of a statement: a colon, or a ' remark or an
+; ELSE, which CRUNCH stores after one
 (def %bp-end?
   (fn (_ ts)
-    (or (null? ts) (%bp-c? ts ":")
+    (or (null? ts) (%bp-c? ts ":") (%bp-kw? ts "ELSE")
         (and (eq? (first (first ts)) (lit rem)) (Str8 starts? "'" (List second (first ts)))))))
 
 (def %bp-expect-c
@@ -493,7 +493,69 @@
 (def %bp-bare
   (list (pair "END" (lit end)) (pair "STOP" (lit stop)) (pair "RETURN" (lit return))
         (pair "RESTORE" (lit restore)) (pair "NEW" (lit new)) (pair "CLEAR" (lit clear))
-        (pair "CONT" (lit cont)) (pair "SAVE" (lit save)) (pair "LOAD" (lit load))))
+        (pair "CONT" (lit cont)) (pair "SAVE" (lit save)) (pair "LOAD" (lit load))
+        (pair "WEND" (lit wend))))
+
+; ELSE N or ELSE statements: (else), the statements after it its clause
+(def %bp-else
+  (fn (_ d ts)
+    (if (%bp-digit? (%bp-byte ts))
+      (let ((n (%bp-line-number d ts)))
+        (pair (list (list (lit else)) (list (lit goto) (first n))) (rest n)))
+      (pair (list (list (lit else))) (pair (list (lit c) ":") ts)))))
+
+; The letter at TS, a one-letter name: (OFFSET . TS-LEFT), OFFSET from A
+(def %bp-letter
+  (fn (_ ts)
+    (if (and (not (null? ts)) (eq? (first (first ts)) (lit name)) (int= (Str8 length (List second (first ts))) 1))
+      (pair (int- (str-byte-ref (List second (first ts)) 0) 65) (rest ts))
+      (%bp-fail))))
+
+; DEFINT, DEFSNG, DEFDBL or DEFSTR's letters and ranges of letters, each
+; (FROM . TO), TO not before FROM (DEFCON): (deftype TYPE RANGES)
+(def %bp-deftype
+  (fn (_ type ts)
+    (let ((go (fn (self ts acc)
+                (let ((from (%bp-letter ts)))
+                  (let ((to (if (%bp-kw? (rest from) "-") (%bp-letter (rest (rest from))) from)))
+                    (when (int< (first to) (first from)) (%bp-fail))
+                    (let ((acc (pair (pair (first from) (first to)) acc)))
+                      (if (%bp-c? (rest to) ",") (self (rest (rest to)) acc)
+                        (pair (list (list (lit deftype) type (List reverse acc))) (rest to)))))))))
+      (go ts ()))))
+
+; SWAP A, B
+(def %bp-swap
+  (fn (_ d ts)
+    (let ((a (%bp-target d ts)))
+      (let ((b (%bp-target d (%bp-expect-c (rest a) ","))))
+        (pair (list (list (lit swap) (first a) (first b))) (rest b))))))
+
+; ERASE A, B ...: the arrays' names
+(def %bp-erase
+  (fn (_ d ts)
+    (let ((go (fn (self ts acc)
+                (let ((got (%bp-name d ts)))
+                  (if (%bp-c? (rest got) ",") (self (rest (rest got)) (pair (first got) acc))
+                    (pair (list (list (lit erase) (List reverse (pair (first got) acc)))) (rest got)))))))
+      (go ts ()))))
+
+; OPTION BASE 0 or 1, the digit read as the next character (the Lexer
+; keeps BASE1 one name)
+(def %bp-option
+  (fn (_ ts)
+    (unless (and (not (null? ts)) (eq? (first (first ts)) (lit name)) (Str8 starts? "BASE" (List second (first ts))))
+      (%bp-fail))
+    (let ((text (List second (first ts))))
+      (let ((digit (if (int< 4 (Str8 length text))
+                     (pair (Str8 sub 4 (int- (Str8 length text) 4) text) (rest ts))
+                     (if (and (not (null? (rest ts))) (eq? (first (first (rest ts))) (lit c)))
+                       (pair (List second (first (rest ts))) (rest (rest ts)))
+                       (%bp-fail)))))
+        (match
+          ((str=? (first digit) "0") (pair (list (list (lit option) 0)) (rest digit)))
+          ((str=? (first digit) "1") (pair (list (list (lit option) 1)) (rest digit)))
+          (#t (%bp-fail)))))))
 
 ; One statement at TS: (STATEMENTS . TS-LEFT)
 (def %bp-statement
@@ -548,6 +610,17 @@
                         (let ((m2 (basic-parse-expr d (rest (rest m1)))))
                           (pair (list (list (lit wait) (first a) (first m1) (first m2))) (rest m2)))
                         (pair (list (list (lit wait) (first a) (first m1) ())) (rest m1))))))
+                ((str=? word "ELSE") (%bp-else d ts))
+                ((str=? word "WHILE")
+                  (let ((got (basic-parse-expr d ts)))
+                    (pair (list (list (lit while) (first got))) (rest got))))
+                ((str=? word "DEFINT") (%bp-deftype 2 ts))
+                ((str=? word "DEFSNG") (%bp-deftype 4 ts))
+                ((str=? word "DEFDBL") (%bp-deftype 8 ts))
+                ((str=? word "DEFSTR") (%bp-deftype 3 ts))
+                ((str=? word "SWAP") (%bp-swap d ts))
+                ((str=? word "ERASE") (%bp-erase d ts))
+                ((str=? word "OPTION") (%bp-option ts))
                 ((str=? word "POKE")
                   (let ((a (basic-parse-expr d ts)))
                     (let ((b (basic-parse-expr d (%bp-expect-c (rest a) ","))))

@@ -303,6 +303,15 @@
             (go (int+ a (int+ hl 3)) (List reverse sizes)))
           a)))))
 
+; The array at A taken out, the arrays past it moved down over it and
+; STREND with them (ERASE): how many bytes it was
+(def mem-array-erase!
+  (fn (_ mem a)
+    (let ((n (%mem-array-total mem a)) (end (mem get (lit strend))))
+      (mem-move! mem (int+ a n) a (int- end (int+ a n)))
+      (mem set! (lit strend) (int- end n))
+      n)))
+
 ; The address of the element at INDEX (counted with the first subscript
 ; fastest) of the array at A, ELEMENT bytes an element
 (def mem-element
@@ -312,4 +321,4 @@
 (provide basic/mem
   mem-peek mem-poke! mem-word mem-word! mem-write! mem-read mem-move! mem-make mem-at
   mem-clear! mem-collect! mem-string-space! mem-string! mem-reason mem-free mem-program!
-  mem-var mem-var-new! mem-var! mem-array mem-array-new! mem-element)
+  mem-var mem-var-new! mem-var! mem-array mem-array-new! mem-array-erase! mem-element)
