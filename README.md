@@ -115,6 +115,12 @@ way (`lib/basic/gwbasic.x`), run by the same machine with
   between needing an ELSE of its own), `WHILE` and `WEND`, `DEFINT`,
   `DEFSNG`, `DEFDBL` and `DEFSTR` (set back by `CLEAR` and `RUN`),
   `SWAP`, `ERASE` and `OPTION BASE`.
+- **Errors.** `ON ERROR GOTO`, `RESUME` (the erring statement, `NEXT` or
+  a line), `ERROR` and the numbers `ERR` and `ERL` give, as GWMAIN.ASM
+  traps them: the line typed is trapped too (`ERL` 65535), an error in
+  the handler is printed, `ON ERROR GOTO 0` there prints the one being
+  handled, and running off the program's end in it is `No RESUME`. While
+  the trap is set an overflow or a division by zero is an error it takes.
 
 Those it does not run, and the words the KIM runs that mean another thing
 here (`SAVE`, `LOAD`, `GET`, `WAIT`), print `SAVE is not in x-basic yet`.

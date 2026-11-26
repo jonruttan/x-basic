@@ -84,6 +84,8 @@
       (m set! (lit rnd) ((m get (lit numbers)) get-or () (lit rnd-seed)))
       ; the file SAVE writes a cassette record to and LOAD reads one from
       (m set! (lit tape) "basic.tape")
+      ; ERR, the last error's number (ERRFLG)
+      (m set! (lit err) 0)
       (%bx-index! m ())
       (%bx-clear! m)
       (when (dialect has? (lit fac)) (%bx-page-zero! m))
@@ -135,6 +137,11 @@
     (m set! (lit option) #f)
     (when ((m get (lit numbers)) get-or #f (lit rnd-clear))
       (m set! (lit rnd) (%bx-kit m (lit rnd-seed))))
+    ; ON ERROR's line (ONELIN), whether its routine is running (ONEFLG),
+    ; and the last error's line (ERRLIN); ERR's number is kept
+    (m set! (lit on-error) ())
+    (m set! (lit in-error) #f)
+    (m set! (lit erl) 0)
     (%bx-restore! m)))
 
 ; The program as a vector, each line number's place in it, and each line's
@@ -178,6 +185,8 @@
 ; Line N's text stored, or the line removed when TEXT is blank
 (def %bx-store!
   (fn (_ m n text)
+    ; the error trap cleared first, so ?OM is not trapped
+    (m set! (lit on-error) ())
     (let ((kept (List filter (fn (_ l) (not (int= (first l) n))) (m get (lit lines))))
           (dialect (m get (lit dialect))))
       (%bx-program! m
@@ -464,14 +473,17 @@
 
 ; What THUNK answers.  Where the kit raises the overflow or the division
 ; by zero its BASIC goes on from, the error is printed where the cursor
-; is, a new line begun, and the answer is the number the raise carries.
+; is, a new line begun, and the answer is the number the raise carries;
+; while ON ERROR is set it is an error, which the trap takes (TRAPER).
 (def %bx-soft
   (fn (_ m thunk)
     (guard (e (let ((label (Err label e)))
                 (if (or (eq? label (lit basic-overflow)) (eq? label (lit basic-div0)))
-                  (do (%bx-out m ((%bx-dialect m (lit error-text)) (if (eq? label (lit basic-div0)) "/0" "OV")))
-                      (%bx-newline m)
-                      (Assoc get (lit value) (e data)))
+                  (let ((code (if (eq? label (lit basic-div0)) "/0" "OV")))
+                    (if (not (null? (m get-or () (lit on-error)))) (%bx-fail code)
+                      (do (%bx-out m ((%bx-dialect m (lit error-text)) code))
+                          (%bx-newline m)
+                          (Assoc get (lit value) (e data)))))
                   (error e))))
       (thunk))))
 
@@ -628,6 +640,8 @@
               ((%bx-kit m (lit fre)) (mem-free (%bx-mem m)))))
         ((str=? word "PEEK") (%bx-int m (mem-peek (%bx-mem m) (%bx-address m a))))
         ((str=? word "USR") (%bx-usr m a))
+        ((str=? word "ERR") (%bx-int m (m get-or 0 (lit err))))
+        ((str=? word "ERL") ((%bx-kit m (lit line-value)) (m get-or 0 (lit erl))))
         ; RND with no argument is RND(1) (RNDMON)
         ((str=? word "RND")
           (let ((rnd (%bx-kit m (lit rnd))))
@@ -1243,6 +1257,33 @@
         (m set! (lit base) n)
         (m set! (lit option) #t)))))
 
+; ON ERROR GOTO N: 0 turns the trap off, and inside a handler prints the
+; error being handled, in its line; else the trap goes to line N, ?US when
+; there is none
+(def %bx-on-error
+  (fn (_ m n)
+    (if (int= n 0)
+      (do (m set! (lit on-error) ())
+          (when (m get-or #f (lit in-error))
+            (let ((at (m get (lit erl))))
+              (m set! (lit line) (if (int= at 65535) () at))
+              (%bx-fail ((%bx-dialect m (lit error-code)) (m get (lit err))))))
+          ())
+      (do (%bx-find m n) (m set! (lit on-error) n) ()))))
+
+; RESUME: 0 the erring statement again, next the one after it, a line
+; number a GOTO; ?RW with no error being handled
+(def %bx-resume
+  (fn (_ m to)
+    (unless (m get-or #f (lit in-error)) (%bx-fail "RW"))
+    (let ((at (m get (lit err-at))))
+      (let ((pos (match
+                   ((eq? to (lit next)) (pair (first at) (rest (rest at))))
+                   ((int= to 0) at)
+                   (#t (%bx-goto m to)))))
+        (m set! (lit in-error) #f)
+        pos))))
+
 ; Statement ST, run with the statements AFTER it on line INDEX
 (def %bx-statement
   (fn (_ m st index after)
@@ -1260,7 +1301,12 @@
         ((eq? tag (lit wend)) (%bx-wend m index after))
         ((eq? tag (lit for)) (%bx-for m st index after))
         ((eq? tag (lit next)) (%bx-next m (List second st)))
-        ((eq? tag (lit end)) (lit end))
+        ((eq? tag (lit end)) (do (m set! (lit in-error) #f) (lit end)))
+        ((eq? tag (lit on-error)) (%bx-on-error m (List second st)))
+        ((eq? tag (lit error))
+          (let ((n (%bx-byte m (%bx-eval m (List second st)))))
+            (if (int= n 0) (%bx-fail "FC") (%bx-fail ((%bx-dialect m (lit error-code)) n)))))
+        ((eq? tag (lit resume)) (%bx-resume m (List second st)))
         ((eq? tag (lit stop)) (lit stop))
         ((eq? tag (lit on)) (%bx-on m st index after))
         ((eq? tag (lit input))
@@ -1297,22 +1343,53 @@
       (if (int< n %bx-sweep-every) (m set! (lit steps) n)
         (do (m set! (lit steps) 0) (Heap collect))))))
 
+; The error E of the statement at AT taken by the ON ERROR line, when one
+; is set and no error is being handled: ERR and ERL set, AT kept for
+; RESUME, and the line's start answered
+(def %bx-trap
+  (fn (_ m e at)
+    (let ((label (Err label e)))
+      (if (or (m get-or #f (lit in-error)) (null? (m get-or () (lit on-error)))
+              (not (List includes? label (list (lit basic) (lit basic-overflow) (lit basic-div0)))))
+        (error e)
+        (let ((code (match
+                      ((eq? label (lit basic-overflow)) "OV")
+                      ((eq? label (lit basic-div0)) "/0")
+                      (#t (Err text e))))
+              (n (m get (lit line))))
+          (m set! (lit err) ((%bx-dialect m (lit error-number)) code))
+          (m set! (lit erl) (if (null? n) 65535 n))
+          (m set! (lit err-at) at)
+          (m set! (lit in-error) #t)
+          (%bx-goto m (m get-or () (lit on-error))))))))
+
+; The position after line INDEX; past the program's last line while an
+; error is being handled, ?NR (PRGEND)
+(def %bx-next-line
+  (fn (_ m index)
+    (let ((pos (%bx-after-line m index)))
+      (if (and (null? pos) (not (int< index 0)) (m get-or #f (lit in-error))) (%bx-fail "NR") pos))))
+
 ; Run from POS to an END, a STOP or the program's end: answers end or stop,
-; or loaded after a LOAD
+; or loaded after a LOAD.  While ON ERROR is set each statement runs under
+; the trap.
 (def %bx-run
   (fn (_ m pos)
     (let ((go (fn (self pos)
                 (if (null? pos) (lit end)
                   (let ((index (first pos)) (sts (rest pos)))
-                    (if (null? sts) (self (%bx-after-line m index))
+                    (if (null? sts) (self (%bx-next-line m index))
                       (do
                         (%bx-sweep m)
                         (m set! (lit index) index)
                         (m set! (lit line) (if (int< index 0) () (first (%bx-line-ref m index))))
-                        (let ((r (%bx-statement m (first sts) index (rest sts))))
+                        (let ((r (if (null? (m get-or () (lit on-error)))
+                                   (%bx-statement m (first sts) index (rest sts))
+                                   (guard (e (%bx-trap m e pos))
+                                     (%bx-statement m (first sts) index (rest sts))))))
                           (match
                             ((null? r) (self (pair index (rest sts))))
-                            ((eq? r (lit next-line)) (self (%bx-after-line m index)))
+                            ((eq? r (lit next-line)) (self (%bx-next-line m index)))
                             ((eq? r (lit loaded)) r)
                             ((or (eq? r (lit end)) (eq? r (lit stop)))
                               (do (m set! (lit cont) (pair index (rest sts))) r))
@@ -1365,6 +1442,7 @@
   (fn (_ m r)
     (m set! (lit stack) ())
     (m set! (lit cont) ())
+    (m set! (lit in-error) #f)
     (%bx-fresh m)
     (let ((label (Err label r)))
       (%bx-out m

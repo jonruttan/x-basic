@@ -434,6 +434,13 @@
 
 (def %bp-on
   (fn (_ d ts)
+    (if (%bp-kw? ts "ERROR")
+      ; ON ERROR GOTO N
+      (if (%bp-kw? (rest ts) "GOTO") (%bp-jump d (rest (rest ts)) (lit on-error)) (%bp-fail))
+      (%bp-on-formula d ts))))
+
+(def %bp-on-formula
+  (fn (_ d ts)
     (let ((which (basic-parse-expr d ts)))
       (let ((kind (match
                     ((%bp-kw? (rest which) "GOTO") (lit goto))
@@ -625,6 +632,15 @@
                 ((str=? word "SWAP") (%bp-swap d ts))
                 ((str=? word "ERASE") (%bp-erase d ts))
                 ((str=? word "OPTION") (%bp-option ts))
+                ; RESUME, RESUME NEXT or RESUME N, 0 the same as none
+                ((str=? word "RESUME")
+                  (match
+                    ((%bp-end? ts) (pair (list (list (lit resume) 0)) ts))
+                    ((%bp-kw? ts "NEXT") (pair (list (list (lit resume) (lit next))) (rest ts)))
+                    (#t (%bp-jump d ts (lit resume)))))
+                ((str=? word "ERROR")
+                  (let ((got (basic-parse-expr d ts)))
+                    (pair (list (list (lit error) (first got))) (rest got))))
                 ; RANDOMIZE, the seed asked for when no formula follows
                 ((str=? word "RANDOMIZE")
                   (if (%bp-end? ts) (pair (list (list (lit randomize) ())) ts)

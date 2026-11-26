@@ -18,7 +18,7 @@
 (module basic/gwbasic)
 (import x/type/list)
 (import x/type/dict)
-(import x/core/doors int+ int- int< int= int>> int& int| str-byte-ref)
+(import x/core/doors int+ int- int* int< int= int>> int& int| str-byte-ref)
 (import x/type/str)
 (import basic/mbf86
   m86-int m86-integer m86-zero? m86->single m86->double m86-cint m86-floor
@@ -128,7 +128,9 @@
       (lit rnd-seed) m86-rnd-seed
       ; CLEAR and RUN put RNDCOP back in RNDX
       (lit rnd-clear) #t
-      (lit randomize) m86-randomize)))
+      (lit randomize) m86-randomize
+      ; ERL, a line number as an unsigned single (INEG2)
+      (lit line-value) (fn (_ n) (m86->single (m86-int n))))))
 
 ; A variable is VALTYP, the name's first two characters (the second 0 when
 ; there is none), the count of those past them and each of those with its
@@ -156,16 +158,55 @@
       (lit array-total) (fn (_ field hl) (int+ field (int+ hl 2)))
       (lit dim-bytes) (fn (_ w) (list (int& w 255) (int>> w 8))))))
 
-; ERRTAB's messages by the codes the machine raises
-(def %gw-messages
-  (Dict from-plist
-    (list
-      "NF" "NEXT without FOR" "SN" "Syntax error" "RG" "RETURN without GOSUB" "OD" "Out of DATA"
-      "FC" "Illegal function call" "OV" "Overflow" "OM" "Out of memory" "US" "Undefined line number"
-      "BS" "Subscript out of range" "DD" "Duplicate Definition" "/0" "Division by zero"
-      "ID" "Illegal direct" "TM" "Type mismatch" "OS" "Out of string space" "LS" "String too long"
-      "ST" "String formula too complex" "CN" "Can't continue" "UF" "Undefined user function"
-      "WH" "WHILE without WEND" "WE" "WEND without WHILE")))
+; ERRTAB: each error's number, the code the machine raises it by (nil for
+; one it does not raise) and its message; a "?" entry prints as an
+; unprintable error.  The disk errors start at 50.
+(def %gw-errors
+  (list
+    (list 1 "NF" "NEXT without FOR") (list 2 "SN" "Syntax error") (list 3 "RG" "RETURN without GOSUB")
+    (list 4 "OD" "Out of DATA") (list 5 "FC" "Illegal function call") (list 6 "OV" "Overflow")
+    (list 7 "OM" "Out of memory") (list 8 "US" "Undefined line number")
+    (list 9 "BS" "Subscript out of range") (list 10 "DD" "Duplicate Definition")
+    (list 11 "/0" "Division by zero") (list 12 "ID" "Illegal direct") (list 13 "TM" "Type mismatch")
+    (list 14 "OS" "Out of string space") (list 15 "LS" "String too long")
+    (list 16 "ST" "String formula too complex") (list 17 "CN" "Can't continue")
+    (list 18 "UF" "Undefined user function") (list 19 "NR" "No RESUME")
+    (list 20 "RW" "RESUME without error") (list 21 "UE" "Unprintable error")
+    (list 22 "MO" "Missing operand") (list 23 "BO" "Line buffer overflow")
+    (list 24 "DT" "Device Timeout") (list 25 "DF" "Device Fault") (list 26 "FN" "FOR Without NEXT")
+    (list 27 "OP" "Out of Paper") (list 29 "WH" "WHILE without WEND") (list 30 "WE" "WEND without WHILE")
+    (list 50 () "FIELD overflow") (list 51 () "Internal error") (list 52 () "Bad file number")
+    (list 53 () "File not found") (list 54 () "Bad file mode") (list 55 () "File already open")
+    (list 57 () "Device I/O Error") (list 58 () "File already exists") (list 61 () "Disk full")
+    (list 62 () "Input past end") (list 63 () "Bad record number") (list 64 () "Bad file name")
+    (list 66 () "Direct statement in file") (list 67 () "Too many files")
+    (list 68 () "Device Unavailable") (list 69 () "Communication buffer overflow")
+    (list 70 () "Disk write protected") (list 71 () "Disk not Ready") (list 72 () "Disk media error")
+    (list 73 () "Advanced Feature") (list 74 () "Rename across disks")))
+
+(def %gw-error-texts
+  (let ((d (Dict make)))
+    (List for-each (fn (_ e) (d set! (first e) (List third e))) %gw-errors)
+    d))
+
+(def %gw-error-numbers
+  (let ((d (Dict make)))
+    (List for-each (fn (_ e) (unless (null? (List second e)) (d set! (List second e) (first e)))) %gw-errors)
+    d))
+
+(def %gw-error-codes
+  (let ((d (Dict make)))
+    (List for-each (fn (_ e) (unless (null? (List second e)) (d set! (first e) (List second e)))) %gw-errors)
+    d))
+
+; The number of the error raised as CODE: its entry's, or, for ERROR of a
+; number with no code, the number CODE spells
+(def %gw-error-number
+  (fn (_ code)
+    (let ((n (%gw-error-numbers get-or () code)))
+      (if (not (null? n)) n
+        (List fold (fn (_ k b) (int+ (int* k 10) (int- b 48))) 0
+          (List map (fn (_ i) (str-byte-ref code i)) (List range 0 (Str8 length code))))))))
 
 (def gwbasic-dialect
   (Dict from-plist
@@ -178,8 +219,8 @@
       ; nothing after them, and a word ending "(" ends there
       (lit crunch) (lit name-start)
       (lit prefix-words) (list "FN" "USR")
-      ; RND with no argument is RND(1)
-      (lit bare-calls) (list "RND")
+      ; RND with no argument is RND(1); ERR and ERL take none
+      (lit bare-calls) (list "RND" "ERR" "ERL")
       ; CRUNCH puts a colon before ELSE
       (lit colon-before) (list "ELSE")
       ; FIN reads a constant from the text as typed
@@ -199,7 +240,10 @@
       (lit width) 80
       (lit array-size) 11
       (lit fold-case) #t
-      (lit error-text) (fn (_ code) (%gw-messages get-or "Unprintable error" code))
+      (lit error-text) (fn (_ code) (%gw-error-texts get-or "Unprintable error" (%gw-error-number code)))
+      ; ERR's number for a code, and ERROR's code for a number
+      (lit error-number) %gw-error-number
+      (lit error-code) (fn (_ n) (%gw-error-codes get-or (Str8 str n) n))
       (lit todo-text) (fn (_ word) (Str8 append word " is not in x-basic yet"))
       (lit in-text) " in "
       (lit break-text) "Break"
