@@ -123,6 +123,11 @@ line reader in x-lang.
 
     make install        # into <share>/bundles/basic
     make check          # the suite, against tests/contract/known-failures.txt
+    make card           # docs/card.md: its format, its row and its programs
+
+[docs/card.md](docs/card.md) is the card: the prompt and BASIC as the KIM
+takes it, in tables and programs that `make card` runs, with a table of
+what GW-BASIC adds.
 
 ## Licence
 
