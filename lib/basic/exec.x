@@ -606,6 +606,44 @@
         (cpu-call! (cpu-make (mem-at mem (lit bytes))) (d get (lit usrpok)) (%bx-usr-hooks m)))
       (if (int= (mem-peek mem (d get (lit valtyp))) 0) (%bx-fac m) (%bx-fail "TM")))))
 
+; The word W's digits, BITS to a digit and the top one taking what is
+; left of its 16, the zeros before the first other digit dropped ($FOUTH,
+; $FOUTO)
+(def %bx-radix
+  (fn (_ w bits)
+    (let ((go (fn (self w acc)
+                (let ((acc (pair (str-byte-ref "0123456789ABCDEF" (int& w (int- (int<< 1 bits) 1))) acc))
+                      (left (int>> w bits)))
+                  (if (int= left 0) acc (self left acc))))))
+      (bytes->str (go w ())))))
+
+; N bytes of B (SPACE2)
+(def %bx-repeat
+  (fn (_ n b) (bytes->str (List map (fn (_ i) b) (List range 0 n)))))
+
+; INSTR([I,] S1, S2): where S2 is first found in S1 from position I (1
+; when not given); 0 when it is not, or I is past S1's end; I when S2 is
+; null.  I is 1 to 255, ?FC else.
+(def %bx-instr
+  (fn (_ m args)
+    (let ((a (first args)))
+      (let ((i (if (pair? a) (let ((i (%bx-byte m a))) (if (int= i 0) (%bx-fail "FC") i)) 1))
+            (more (if (pair? a) (rest args) args)))
+        (unless (int= (List length more) 2) (%bx-fail "SN"))
+        (let ((s1 (%bx-string (first more))) (s2 (%bx-string (List second more))))
+          (let ((n1 (Str8 length s1)) (n2 (Str8 length s2)))
+            (%bx-int m
+              (match
+                ((not (int< (int- i 1) n1)) 0)
+                ((int= n2 0) i)
+                (#t
+                  (let ((go (fn (self at)
+                              (match
+                                ((int< (int- n1 at) n2) 0)
+                                ((str=? (Str8 sub at n2 s1) s2) (int+ at 1))
+                                (#t (self (int+ at 1)))))))
+                    (go (int- i 1))))))))))))
+
 (def %bx-call
   (fn (_ m word args)
     (let ((a (if (null? args) () (first args))))
@@ -640,6 +678,16 @@
               ((%bx-kit m (lit fre)) (mem-free (%bx-mem m)))))
         ((str=? word "PEEK") (%bx-int m (mem-peek (%bx-mem m) (%bx-address m a))))
         ((str=? word "USR") (%bx-usr m a))
+        ((str=? word "HEX$") (%bx-radix ((%bx-kit m (lit word-bits)) (%bx-number a)) 4))
+        ((str=? word "OCT$") (%bx-radix ((%bx-kit m (lit word-bits)) (%bx-number a)) 3))
+        ((str=? word "SPACE$") (%bx-repeat (%bx-byte m a) 32))
+        ; STRING$'s character, a string's first or a number's (ASC2, CONINT)
+        ((str=? word "STRING$")
+          (let ((n (%bx-byte m a)) (c (List second args)))
+            (%bx-repeat n
+              (if (pair? c) (%bx-byte m c)
+                (if (= (Str8 length (%bx-string c)) 0) (%bx-fail "FC") (str-byte-ref (%bx-string c) 0))))))
+        ((str=? word "INSTR") (%bx-instr m args))
         ((str=? word "ERR") (%bx-int m (m get-or 0 (lit err))))
         ((str=? word "ERL") ((%bx-kit m (lit line-value)) (m get-or 0 (lit erl))))
         ; RND with no argument is RND(1) (RNDMON)
