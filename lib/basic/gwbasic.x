@@ -90,6 +90,20 @@
     (pair "SYSTEM" (list 254 131)) (pair "TIME$" (list 254 142))
     ))
 
+; A number as FRQINT takes one, -32768 to 65535, as the 16 bits of a
+; word: a single or a double from 32768 to below 65536 has 65536 taken
+; from it, in single precision, before CINT; ?OV past the range
+(def %gw-frqint
+  (fn (_ v)
+    (int& 65535
+      (m86-integer
+        (m86-cint
+          (if (or (int= (first v) 2)
+                  (int< (m86-cmp v (m86->single (m86-int 32768))) 0)
+                  (not (int< (m86-cmp v (m86->single (m86-int 65536))) 0)))
+            v
+            (m86-sub (m86->single v) (m86->single (m86-int 65536)))))))))
+
 (def %gw-numbers
   (Dict from-plist
     (list
@@ -130,7 +144,9 @@
       (lit rnd-clear) #t
       (lit randomize) m86-randomize
       ; ERL, a line number as an unsigned single (INEG2)
-      (lit line-value) (fn (_ n) (m86->single (m86-int n))))))
+      (lit line-value) (fn (_ n) (m86->single (m86-int n)))
+      ; HEX$ and OCT$'s word (FRQINT)
+      (lit word-bits) %gw-frqint)))
 
 ; A variable is VALTYP, the name's first two characters (the second 0 when
 ; there is none), the count of those past them and each of those with its

@@ -182,7 +182,9 @@
         (pair "LEN" (list 1)) (pair "STR$" (list 1)) (pair "VAL" (list 1))
         (pair "ASC" (list 1)) (pair "CHR$" (list 1)) (pair "LEFT$" (list 2))
         (pair "RIGHT$" (list 2)) (pair "MID$" (list 2 3))
-        (pair "CINT" (list 1)) (pair "CSNG" (list 1)) (pair "CDBL" (list 1)) (pair "FIX" (list 1))))
+        (pair "CINT" (list 1)) (pair "CSNG" (list 1)) (pair "CDBL" (list 1)) (pair "FIX" (list 1))
+        (pair "HEX$" (list 1)) (pair "OCT$" (list 1)) (pair "SPACE$" (list 1))
+        (pair "STRING$" (list 2)) (pair "INSTR" (list 2 3))))
 
 (def %bp-primary
   (fn (_ d ts)

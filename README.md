@@ -115,6 +115,9 @@ way (`lib/basic/gwbasic.x`), run by the same machine with
   between needing an ELSE of its own), `WHILE` and `WEND`, `DEFINT`,
   `DEFSNG`, `DEFDBL` and `DEFSTR` (set back by `CLEAR` and `RUN`),
   `SWAP`, `ERASE` and `OPTION BASE`.
+- **Strings.** `HEX$` and `OCT$` of a word from -32768 to 65535 (FRQINT),
+  `INSTR` with or without its start, `SPACE$` and `STRING$`, as
+  BISTRS.ASM makes them.
 - **Errors.** `ON ERROR GOTO`, `RESUME` (the erring statement, `NEXT` or
   a line), `ERROR` and the numbers `ERR` and `ERL` give, as GWMAIN.ASM
   traps them: the line typed is trapped too (`ERL` 65535), an error in
