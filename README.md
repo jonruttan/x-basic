@@ -94,6 +94,13 @@ way (`lib/basic/gwbasic.x`), run by the same machine with
   `EQV` and `IMP`; `CINT`, `CSNG`, `CDBL` and `FIX`. An overflow or a
   division by zero in arithmetic prints its message and goes on with the
   largest number, as the 8086 does.
+- **Maths.** `lib/basic/mbf86-math.x`: `^`, `SQR`, `LOG`, `EXP`, `SIN`,
+  `COS`, `TAN`, `ATN` and `RND` as MATH1.ASM and MATH2.ASM compute them,
+  each in single precision, with Hart's coefficients; inside one of them
+  or a `^`, an overflow goes on and only the first is printed. `RND` with
+  no argument, and `RANDOMIZE`, which asks for the seed when it is given
+  none and keeps the old seed's lowest byte, so the same seed twice need
+  not give the same numbers; `CLEAR` and `RUN` put the seed back.
 - **Lines.** The 8086's tokens. A reserved word is taken only where a
   name could not go on, so `FORI` is a name and `FOR I` a loop; `'`
   starts a remark. Names keep 40 characters and a `$`, `%`, `!` or `#`;
@@ -111,9 +118,8 @@ way (`lib/basic/gwbasic.x`), run by the same machine with
 
 Those it does not run, and the words the KIM runs that mean another thing
 here (`SAVE`, `LOAD`, `GET`, `WAIT`), print `SAVE is not in x-basic yet`.
-Not yet: `^` and the transcendental functions, `GO TO` with a blank, DEF
-FN's memory entries, LIST of the crunched text, and the line editor after
-a syntax error.
+Not yet: `GO TO` with a blank, DEF FN's memory entries, LIST of the
+crunched text, and the line editor after a syntax error.
 
 A
 program run from a file (`x -l basic -f FILE`) or piped in waits on a

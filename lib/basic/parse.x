@@ -207,6 +207,10 @@
           (let ((name (%bp-name d (rest ts))))
             (let ((got (basic-parse-expr d (%bp-expect-c (rest name) "("))))
               (pair (list (lit fn) (first name) (first got)) (%bp-expect-c (rest got) ")")))))
+        ; a function the dialect lets go without its argument, as RND is
+        ((and (eq? (first t) (lit kw)) (not (%bp-c? (rest ts) "("))
+              (List find (fn (_ w) (str=? w (List second t))) (d get-or () (lit bare-calls))))
+          (pair (list (lit call) (List second t) ()) (rest ts)))
         ((eq? (first t) (lit kw))
           (let ((fun (List find (fn (_ f) (str=? (first f) (List second t))) %bp-functions)))
             (if (null? fun) (%bp-fail)
@@ -621,6 +625,11 @@
                 ((str=? word "SWAP") (%bp-swap d ts))
                 ((str=? word "ERASE") (%bp-erase d ts))
                 ((str=? word "OPTION") (%bp-option ts))
+                ; RANDOMIZE, the seed asked for when no formula follows
+                ((str=? word "RANDOMIZE")
+                  (if (%bp-end? ts) (pair (list (list (lit randomize) ())) ts)
+                    (let ((got (basic-parse-expr d ts)))
+                      (pair (list (list (lit randomize) (first got))) (rest got)))))
                 ((str=? word "POKE")
                   (let ((a (basic-parse-expr d ts)))
                     (let ((b (basic-parse-expr d (%bp-expect-c (rest a) ","))))
