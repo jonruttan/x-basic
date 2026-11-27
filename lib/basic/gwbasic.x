@@ -239,6 +239,8 @@
       (lit bare-calls) (list "RND" "ERR" "ERL")
       ; CRUNCH puts a colon before ELSE
       (lit colon-before) (list "ELSE")
+      ; MID$ on the left of an equals sign (LHSMID)
+      (lit mid-statement) #t
       ; FIN reads a constant from the text as typed
       (lit number-text) (lit raw)
       (lit numbers) %gw-numbers
