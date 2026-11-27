@@ -451,14 +451,37 @@
         (let ((ns (%bp-line-numbers d (rest (rest which)))))
           (pair (list (list (lit on) (first which) kind (first ns))) (rest ns)))))))
 
+; An input statement's quoted prompt and the semicolon after it, or nil
+(def %bp-prompt
+  (fn (_ d ts)
+    (if (and (not (null? ts)) (eq? (first (first ts)) (lit str)))
+      (let ((got (%bp-primary d ts)))
+        (pair (List second (first got)) (%bp-expect-c (rest got) ";")))
+      (pair () ts))))
+
 (def %bp-input
   (fn (_ d ts)
-    (let ((prompt (if (and (not (null? ts)) (eq? (first (first ts)) (lit str)))
-                    (let ((got (%bp-primary d ts)))
-                      (pair (List second (first got)) (%bp-expect-c (rest got) ";")))
-                    (pair () ts))))
+    (let ((prompt (%bp-prompt d ts)))
       (let ((targets (%bp-targets d (rest prompt))))
         (pair (list (list (lit input) (first prompt) (first targets))) (rest targets))))))
+
+; LINE INPUT ["PROMPT";] V$
+(def %bp-line-input
+  (fn (_ d ts)
+    (let ((prompt (%bp-prompt d ts)))
+      (let ((target (%bp-target d (rest prompt))))
+        (pair (list (list (lit line-input) (first prompt) (first target))) (rest target))))))
+
+; WRITE [E [{,|;} E]...]: the formulas, either mark between two
+(def %bp-write
+  (fn (_ d ts)
+    (if (%bp-end? ts) (pair (list (list (lit write) ())) ts)
+      (let ((go (fn (self ts acc)
+                  (let ((got (basic-parse-expr d ts)))
+                    (if (or (%bp-c? (rest got) ",") (%bp-c? (rest got) ";"))
+                      (self (rest (rest got)) (pair (first got) acc))
+                      (pair (list (list (lit write) (List reverse (pair (first got) acc)))) (rest got)))))))
+        (go ts ())))))
 
 ; LIST, LIST N, LIST N-, LIST -M, LIST N-M
 (def %bp-list
@@ -606,6 +629,8 @@
                   (let ((got (%bp-targets d ts)))
                     (pair (list (list (lit read) (first got))) (rest got))))
                 ((str=? word "INPUT") (%bp-input d ts))
+                ((and (str=? word "LINE") (%bp-kw? ts "INPUT")) (%bp-line-input d (rest ts)))
+                ((str=? word "WRITE") (%bp-write d ts))
                 ((str=? word "RUN")
                   (if (%bp-end? ts) (pair (list (list (lit run) ())) ts) (%bp-jump d ts (lit run))))
                 ((str=? word "LIST") (%bp-list d ts))

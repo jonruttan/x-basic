@@ -870,6 +870,34 @@
                   (%bx-input m prompt targets))
               r)))))))
 
+; LINE INPUT: the prompt, then the line typed, all of it, put in the
+; string TARGET (SINLIN, STRLT3); ?TM for a number's; no line at all ends
+; the program
+(def %bx-line-input
+  (fn (_ m prompt target)
+    (%bx-out m (if (null? prompt) "" prompt))
+    (unless (%bx-string-name? m (List second target)) (%bx-fail "TM"))
+    (let ((line (%bx-reply m "")))
+      (if (null? line) (lit end)
+        (do (%bx-set! m target line) ())))))
+
+; WRITE: each value, a string in quotes and a number as FOUT makes it
+; without the blank for its sign, commas between, then a new line
+(def %bx-write
+  (fn (_ m es)
+    (let ((go (fn (self es sep)
+                (unless (null? es)
+                  (%bx-out m sep)
+                  (let ((v (%bx-eval m (first es))))
+                    (%bx-out m
+                      (if (pair? v)
+                        (let ((s ((%bx-kit m (lit ->str)) v)))
+                          (if (Str8 starts? " " s) (Str8 sub 1 (int- (Str8 length s) 1) s) s))
+                        (Str8 append "\"" (%bx-string v) "\""))))
+                  (self (rest es) ",")))))
+      (go es "")
+      (%bx-newline m))))
+
 ; RANDOMIZE: the seed from the formula E, or asked for until a number alone
 ; is typed, made an integer and given to the kit (RANDOM, STRNDS).  An
 ; empty reply is 0; none at all ends the program.
@@ -1359,6 +1387,8 @@
         ((eq? tag (lit on)) (%bx-on m st index after))
         ((eq? tag (lit input))
           (if (int< index 0) (%bx-fail "ID") (%bx-input m (List second st) (List third st))))
+        ((eq? tag (lit line-input)) (%bx-line-input m (List second st) (List third st)))
+        ((eq? tag (lit write)) (do (%bx-write m (List second st)) ()))
         ((eq? tag (lit get))
           (if (int< index 0) (%bx-fail "ID") (%bx-get-keys m (List second st))))
         ((eq? tag (lit randomize)) (%bx-randomize m (List second st)))

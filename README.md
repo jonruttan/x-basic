@@ -118,6 +118,9 @@ way (`lib/basic/gwbasic.x`), run by the same machine with
 - **Strings.** `HEX$` and `OCT$` of a word from -32768 to 65535 (FRQINT),
   `INSTR` with or without its start, `SPACE$` and `STRING$`, as
   BISTRS.ASM makes them.
+- **Output and input.** `WRITE`, strings in quotes and numbers without
+  the blank for their sign, commas between (FIVEO.ASM); `LINE INPUT`,
+  the whole line typed into a string, with no question mark.
 - **Errors.** `ON ERROR GOTO`, `RESUME` (the erring statement, `NEXT` or
   a line), `ERROR` and the numbers `ERR` and `ERL` give, as GWMAIN.ASM
   traps them: the line typed is trapped too (`ERL` 65535), an error in
