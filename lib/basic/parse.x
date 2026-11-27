@@ -383,6 +383,15 @@
       (let ((value (basic-parse-expr d (%bp-expect-kw (rest target) "="))))
         (pair (list (list (lit let) (first target) (first value))) (rest value))))))
 
+; MID$(V$, N [, M]) = E, where the dialect has the statement (LHSMID)
+(def %bp-mid
+  (fn (_ d ts)
+    (let ((target (%bp-target d (%bp-expect-c ts "("))))
+      (let ((n (basic-parse-expr d (%bp-expect-c (rest target) ","))))
+        (let ((m (if (%bp-c? (rest n) ",") (basic-parse-expr d (rest (rest n))) (pair () (rest n)))))
+          (let ((value (basic-parse-expr d (%bp-expect-kw (%bp-expect-c (rest m) ")") "="))))
+            (pair (list (list (lit mid) (first target) (first n) (first m) (first value))) (rest value))))))))
+
 ; FOR V = A TO B [STEP C]; V a number variable, an integer only where the
 ; dialect allows one
 (def %bp-for
@@ -631,6 +640,7 @@
                 ((str=? word "INPUT") (%bp-input d ts))
                 ((and (str=? word "LINE") (%bp-kw? ts "INPUT")) (%bp-line-input d (rest ts)))
                 ((str=? word "WRITE") (%bp-write d ts))
+                ((and (str=? word "MID$") (d get-or #f (lit mid-statement))) (%bp-mid d ts))
                 ((str=? word "RUN")
                   (if (%bp-end? ts) (pair (list (list (lit run) ())) ts) (%bp-jump d ts (lit run))))
                 ((str=? word "LIST") (%bp-list d ts))

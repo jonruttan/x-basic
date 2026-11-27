@@ -465,6 +465,35 @@
               (if (%bx-string-name? m name) (%bx-string-to! m at fit)
                 (mem-write! (%bx-mem m) at (%bx-number-bytes m name fit))))))))))
 
+; MID$(TARGET, N, M) = E (LHSMID): the string's bytes from position N
+; replaced by E's, no more than M of them, nor past its end; its length
+; kept.  A string in the program's text is copied to string space first.
+; N is 1 to 255 and no more than the length, M 0 to 255 (255 when not
+; given, nothing done for 0); ?FC else.
+(def %bx-mid!
+  (fn (_ m target n-e m-e e)
+    (let ((name (List second target)) (mem (%bx-mem m)))
+      (unless (%bx-string-name? m name) (%bx-fail "TM"))
+      (let ((d (if (eq? (first target) (lit var)) (%bx-var-at! m name)
+                 (let ((args (List map (fn (_ e) (%bx-eval m e)) (List third target))))
+                   (let ((a (%bx-array m name (List length args))))
+                     (%bx-element-at m name a (%bx-slot m a args)))))))
+        (let ((len (mem-peek mem d)) (at (mem-word mem (int+ d 1))))
+          (when (and (int< 0 len) (int< at (mem-at mem (lit fretop))))
+            (mem-word! mem (int+ d 1) (mem-string! mem (mem-read mem at len))))
+          (let ((n (%bx-byte m (%bx-eval m n-e))))
+            (when (int= n 0) (%bx-fail "FC"))
+            (let ((most (if (null? m-e) 255 (%bx-byte m (%bx-eval m m-e))))
+                  (text (%bx-string (%bx-eval m e))))
+              (unless (int= most 0)
+                (when (int< len n) (%bx-fail "FC"))
+                (let ((room (int+ (int- len n) 1)))
+                  (let ((k (List fold (fn (_ a b) (if (int< b a) b a)) room
+                             (list most (Str8 length text)))))
+                    (unless (int= k 0)
+                      (mem-write! mem (int+ (mem-word mem (int+ d 1)) (int- n 1))
+                                  (%bx-bytes (Str8 sub 0 k text))))))))))))))
+
 ; --- expressions ----------------------------------------------------------
 
 ; A 16-bit two's complement word as a signed integer
@@ -1389,6 +1418,8 @@
           (if (int< index 0) (%bx-fail "ID") (%bx-input m (List second st) (List third st))))
         ((eq? tag (lit line-input)) (%bx-line-input m (List second st) (List third st)))
         ((eq? tag (lit write)) (do (%bx-write m (List second st)) ()))
+        ((eq? tag (lit mid))
+          (do (%bx-mid! m (List second st) (List third st) (List ref 3 st) (List ref 4 st)) ()))
         ((eq? tag (lit get))
           (if (int< index 0) (%bx-fail "ID") (%bx-get-keys m (List second st))))
         ((eq? tag (lit randomize)) (%bx-randomize m (List second st)))

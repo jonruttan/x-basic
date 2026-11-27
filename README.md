@@ -117,7 +117,9 @@ way (`lib/basic/gwbasic.x`), run by the same machine with
   `SWAP`, `ERASE` and `OPTION BASE`.
 - **Strings.** `HEX$` and `OCT$` of a word from -32768 to 65535 (FRQINT),
   `INSTR` with or without its start, `SPACE$` and `STRING$`, as
-  BISTRS.ASM makes them.
+  BISTRS.ASM makes them. The `MID$` statement replaces a string's bytes
+  where they are, its length kept, a string in the program's text copied
+  to string space first.
 - **Output and input.** `WRITE`, strings in quotes and numbers without
   the blank for their sign, commas between (FIVEO.ASM); `LINE INPUT`,
   the whole line typed into a string, with no question mark.
