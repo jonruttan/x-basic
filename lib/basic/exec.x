@@ -238,22 +238,38 @@
 
 ; --- values ---------------------------------------------------------------
 
-; A string is its text when it has no place in memory yet (a function's
-; answer, a constant typed at the prompt, a reply to INPUT), or #(TEXT
-; ADDRESS VAR?) when it has one: in the program's text or in string space,
-; VAR? when it was read from a variable.
+; A string is #(BYTES ADDRESS VAR?): BYTES its bytes, a list, so a zero
+; byte is one like any other (an x string ends at its first); ADDRESS
+; where it is in memory, in the program's text or in string space, or nil
+; when it has no place yet (a function's answer, a constant typed at the
+; prompt, a reply to INPUT); VAR? when it was read from a variable.
 (def %bx-number
   (fn (_ v) (if (pair? v) v (%bx-fail "TM"))))
 
-(def %bx-placed (fn (_ text a var?) (Vector from-list (list text a var?))))
+(def %bx-placed (fn (_ bytes a var?) (Vector from-list (list bytes a var?))))
 
-; V's text, ?TM for a number
+; A string of BYTES with no place yet
+(def %bx-text (fn (_ bytes) (%bx-placed bytes () #f)))
+
+; The x string S as a string with no place yet
+(def %bx-text-of (fn (_ s) (%bx-text (%bx-bytes s))))
+
+; V's bytes, ?TM for a number
 (def %bx-string
-  (fn (_ v)
-    (match
-      ((pair? v) (%bx-fail "TM"))
-      ((str? v) v)
-      (#t (Vector ref 0 v)))))
+  (fn (_ v) (if (pair? v) (%bx-fail "TM") (Vector ref 0 v))))
+
+; BYTES up to the first zero, as an x string: what FIN reads, which a zero
+; ends
+(def %bx-x-string
+  (fn (_ bytes)
+    (let ((go (fn (self bs acc)
+                (if (or (null? bs) (int= (first bs) 0)) (bytes->str (List reverse acc))
+                  (self (rest bs) (pair (first bs) acc))))))
+      (go bytes ()))))
+
+; BYTES as the x string the terminal is given: a zero byte is not sent
+(def %bx-shown
+  (fn (_ bytes) (bytes->str (List filter (fn (_ b) (not (int= b 0))) bytes))))
 
 ; V checked to be a string, its place kept
 (def %bx-string-value
@@ -264,18 +280,18 @@
   (fn (_ m d)
     (let ((mem (%bx-mem m)))
       (let ((n (mem-peek mem d)) (a (mem-word mem (int+ d 1))))
-        (%bx-placed (if (int= n 0) "" (bytes->str (mem-read mem a n))) a #t)))))
+        (%bx-placed (if (int= n 0) () (mem-read mem a n)) a #t)))))
 
 ; The string V put at the descriptor D (GETSPT and COPY): text with no
 ; place is given space; a string read from a variable is copied when it is
 ; in string space; one in the program's text is pointed at where it is
 (def %bx-string-to!
   (fn (_ m d v)
-    (let ((mem (%bx-mem m)) (text (%bx-string v)))
-      (let ((n (Str8 length text)))
-        (let ((a (if (or (str? v)
+    (let ((mem (%bx-mem m)) (bytes (%bx-string v)))
+      (let ((n (List length bytes)))
+        (let ((a (if (or (null? (Vector ref 1 v))
                          (and (Vector ref 2 v) (not (int< (Vector ref 1 v) (mem-at mem (lit fretop))))))
-                   (if (int= n 0) 0 (mem-string! mem (%bx-bytes text)))
+                   (if (int= n 0) 0 (mem-string! mem bytes))
                    (Vector ref 1 v))))
           (mem-word! mem (int+ d 1) a)
           (%bx-poke-byte! m d n))))))
@@ -304,9 +320,9 @@
 
 (def %bx-truth (fn (_ m b) (%bx-int m (if b -1 0))))
 
-; A string no longer than 255
+; A string of BYTES no longer than 255
 (def %bx-checked
-  (fn (_ s) (if (int< 255 (Str8 length s)) (%bx-fail "LS") s)))
+  (fn (_ bytes) (if (int< 255 (List length bytes)) (%bx-fail "LS") (%bx-text bytes))))
 
 ; --- names and types ------------------------------------------------------
 
@@ -351,7 +367,7 @@
 
 (def %bx-default
   (fn (_ m name)
-    (if (%bx-string-name? m name) "" ((%bx-kit m (lit fit)) (%bx-type m name) (%bx-kit m (lit zero))))))
+    (if (%bx-string-name? m name) (%bx-text ()) ((%bx-kit m (lit fit)) (%bx-type m name) (%bx-kit m (lit zero))))))
 
 ; --- variables and arrays -------------------------------------------------
 
@@ -445,7 +461,7 @@
     (let ((name (List second target)))
       (if (eq? (first target) (lit var))
         (if (%bx-string-name? m name)
-          (let ((a (%bx-var-at m name))) (if (null? a) "" (%bx-string-at m a)))
+          (let ((a (%bx-var-at m name))) (if (null? a) (%bx-text ()) (%bx-string-at m a)))
           (%bx-number-of m name))
         (let ((args (List map (fn (_ e) (%bx-eval m e)) (List third target))))
           (let ((a (%bx-array m name (List length args))))
@@ -484,15 +500,15 @@
           (let ((n (%bx-byte m (%bx-eval m n-e))))
             (when (int= n 0) (%bx-fail "FC"))
             (let ((most (if (null? m-e) 255 (%bx-byte m (%bx-eval m m-e))))
-                  (text (%bx-string (%bx-eval m e))))
+                  (bytes (%bx-string (%bx-eval m e))))
               (unless (int= most 0)
                 (when (int< len n) (%bx-fail "FC"))
                 (let ((room (int+ (int- len n) 1)))
                   (let ((k (List fold (fn (_ a b) (if (int< b a) b a)) room
-                             (list most (Str8 length text)))))
+                             (list most (List length bytes)))))
                     (unless (int= k 0)
                       (mem-write! mem (int+ (mem-word mem (int+ d 1)) (int- n 1))
-                                  (%bx-bytes (Str8 sub 0 k text))))))))))))))
+                                  (List take k bytes)))))))))))))
 
 ; --- expressions ----------------------------------------------------------
 
@@ -532,7 +548,7 @@
   (fn (_ m word a b)
     (match
       ((str=? word "+")
-        (if (and (not (pair? a)) (not (pair? b))) (%bx-checked (Str8 append (%bx-string a) (%bx-string b)))
+        (if (and (not (pair? a)) (not (pair? b))) (%bx-checked (List append (%bx-string a) (%bx-string b)))
           (%bx-arith m (lit add) (%bx-number a) (%bx-number b))))
       ((str=? word "-") (%bx-arith m (lit sub) (%bx-number a) (%bx-number b)))
       ((str=? word "*") (%bx-arith m (lit mul) (%bx-number a) (%bx-number b)))
@@ -546,18 +562,15 @@
       ((str=? word "EQV") (%bx-logic m (fn (_ x y) (int- 65535 (int- (int| x y) (int& x y)))) a b))
       (#t (%bx-logic m (fn (_ x y) (int| (int- 65535 x) y)) a b)))))
 
-; -1, 0 or 1 comparing two strings byte by byte
+; -1, 0 or 1 comparing two strings' bytes A and B one by one
 (def %bx-str-cmp
   (fn (_ a b)
-    (let ((na (Str8 length a)) (nb (Str8 length b)))
-      (let ((go (fn (self i)
-                  (match
-                    ((int= i na) (if (int= i nb) 0 -1))
-                    ((int= i nb) 1)
-                    ((int< (str-byte-ref a i) (str-byte-ref b i)) -1)
-                    ((int< (str-byte-ref b i) (str-byte-ref a i)) 1)
-                    (#t (self (int+ i 1)))))))
-        (go 0)))))
+    (match
+      ((null? a) (if (null? b) 0 -1))
+      ((null? b) 1)
+      ((int< (first a) (first b)) -1)
+      ((int< (first b) (first a)) 1)
+      (#t (%bx-str-cmp (rest a) (rest b))))))
 
 (def %bx-rel
   (fn (_ m mask a b)
@@ -644,11 +657,19 @@
                 (let ((acc (pair (str-byte-ref "0123456789ABCDEF" (int& w (int- (int<< 1 bits) 1))) acc))
                       (left (int>> w bits)))
                   (if (int= left 0) acc (self left acc))))))
-      (bytes->str (go w ())))))
+      (%bx-text (go w ())))))
 
 ; N bytes of B (SPACE2)
 (def %bx-repeat
-  (fn (_ n b) (bytes->str (List map (fn (_ i) b) (List range 0 n)))))
+  (fn (_ n b) (%bx-text (List map (fn (_ i) b) (List range 0 n)))))
+
+; Whether the bytes S start with the bytes P
+(def %bx-starts?
+  (fn (_ p s)
+    (match
+      ((null? p) #t)
+      ((or (null? s) (not (int= (first p) (first s)))) #f)
+      (#t (%bx-starts? (rest p) (rest s))))))
 
 ; INSTR([I,] S1, S2): where S2 is first found in S1 from position I (1
 ; when not given); 0 when it is not, or I is past S1's end; I when S2 is
@@ -660,18 +681,18 @@
             (more (if (pair? a) (rest args) args)))
         (unless (int= (List length more) 2) (%bx-fail "SN"))
         (let ((s1 (%bx-string (first more))) (s2 (%bx-string (List second more))))
-          (let ((n1 (Str8 length s1)) (n2 (Str8 length s2)))
+          (let ((n1 (List length s1)) (n2 (List length s2)))
             (%bx-int m
               (match
                 ((not (int< (int- i 1) n1)) 0)
                 ((int= n2 0) i)
                 (#t
-                  (let ((go (fn (self at)
+                  (let ((go (fn (self at left)
                               (match
                                 ((int< (int- n1 at) n2) 0)
-                                ((str=? (Str8 sub at n2 s1) s2) (int+ at 1))
-                                (#t (self (int+ at 1)))))))
-                    (go (int- i 1))))))))))))
+                                ((%bx-starts? s2 left) (int+ at 1))
+                                (#t (self (int+ at 1) (rest left)))))))
+                    (go (int- i 1) (List drop (int- i 1) s1))))))))))))
 
 (def %bx-call
   (fn (_ m word args)
@@ -680,26 +701,26 @@
         ((str=? word "SGN") (%bx-int m ((%bx-kit m (lit sign)) (%bx-number a))))
         ((str=? word "INT") ((%bx-kit m (lit floor)) (%bx-number a)))
         ((str=? word "ABS") ((%bx-kit m (lit abs)) (%bx-number a)))
-        ((str=? word "LEN") (%bx-int m (Str8 length (%bx-string a))))
-        ((str=? word "STR$") ((%bx-kit m (lit ->str)) (%bx-number a)))
+        ((str=? word "LEN") (%bx-int m (List length (%bx-string a))))
+        ((str=? word "STR$") (%bx-text-of ((%bx-kit m (lit ->str)) (%bx-number a))))
+        ; FIN reads the text to its first zero byte
         ((str=? word "VAL")
-          (let ((got (%bx-value m (%bx-string a)))) (if (null? got) (%bx-kit m (lit zero)) (first got))))
+          (let ((got (%bx-value m (%bx-x-string (%bx-string a)))))
+            (if (null? got) (%bx-kit m (lit zero)) (first got))))
         ((str=? word "ASC")
-          (if (= (Str8 length (%bx-string a)) 0) (%bx-fail "FC") (%bx-int m (str-byte-ref (%bx-string a) 0))))
-        ((str=? word "CHR$") (bytes->str (list (%bx-byte m a))))
+          (let ((s (%bx-string a))) (if (null? s) (%bx-fail "FC") (%bx-int m (first s)))))
+        ((str=? word "CHR$") (%bx-text (list (%bx-byte m a))))
         ((str=? word "LEFT$")
           (let ((s (%bx-string a)) (n (%bx-byte m (List second args))))
-            (if (int< (Str8 length s) n) s (Str8 sub 0 n s))))
+            (%bx-text (List take n s))))
         ((str=? word "RIGHT$")
           (let ((s (%bx-string a)) (n (%bx-byte m (List second args))))
-            (if (int< (Str8 length s) n) s (Str8 sub (int- (Str8 length s) n) n s))))
+            (%bx-text (if (int< (List length s) n) s (List drop (int- (List length s) n) s)))))
         ((str=? word "MID$")
           (let ((s (%bx-string a)) (i (%bx-byte m (List second args)))
                 (n (if (null? (rest (rest args))) 255 (%bx-byte m (List third args)))))
             (when (int= i 0) (%bx-fail "FC"))
-            (let ((left (int- (Str8 length s) (int- i 1))))
-              (if (int< left 1) ""
-                (Str8 sub (int- i 1) (if (int< left n) left n) s)))))
+            (%bx-text (List sub (int- i 1) n s))))
         ((str=? word "POS") (%bx-int m (m get (lit col))))
         ; the strings collected, then FRETOP - STREND as the kit gives it
         ((str=? word "FRE")
@@ -715,7 +736,7 @@
           (let ((n (%bx-byte m a)) (c (List second args)))
             (%bx-repeat n
               (if (pair? c) (%bx-byte m c)
-                (if (= (Str8 length (%bx-string c)) 0) (%bx-fail "FC") (str-byte-ref (%bx-string c) 0))))))
+                (let ((s (%bx-string c))) (if (null? s) (%bx-fail "FC") (first s)))))))
         ((str=? word "INSTR") (%bx-instr m args))
         ((str=? word "ERR") (%bx-int m (m get-or 0 (lit err))))
         ((str=? word "ERL") ((%bx-kit m (lit line-value)) (m get-or 0 (lit erl))))
@@ -766,9 +787,9 @@
 (def %bx-constant
   (fn (_ m e)
     (let ((index (m get (lit index))) (ord (List third e)))
-      (if (or (null? index) (int< index 0) (null? ord)) (List second e)
+      (if (or (null? index) (int< index 0) (null? ord)) (%bx-text-of (List second e))
         (let ((strs (List second (List ref 3 (%bx-line-ref m index)))))
-          (%bx-placed (List second e) (int+ (%bx-line-text m index) (List ref ord strs)) #f))))))
+          (%bx-placed (%bx-bytes (List second e)) (int+ (%bx-line-text m index) (List ref ord strs)) #f))))))
 
 (def %bx-eval
   (fn (_ m e)
@@ -809,7 +830,7 @@
             (#t
               (let ((v (%bx-eval m (List second item))))
                 (if (pair? v) (%bx-out m (Str8 append ((%bx-kit m (lit ->str)) v) " "))
-                  (%bx-out m (%bx-string v))))))))
+                  (%bx-out m (%bx-shown (%bx-string v)))))))))
       items)
     (when (or (null? items)
               (not (List includes? (first (List last items)) (list (lit semi) (lit comma)))))
@@ -840,7 +861,7 @@
 (def %bx-item
   (fn (_ m name item at)
     (if (%bx-string-name? m name)
-      (if (null? at) (List second item) (%bx-placed (List second item) at #f))
+      (if (null? at) (%bx-text-of (List second item)) (%bx-placed (%bx-bytes (List second item)) at #f))
       (if (eq? (first item) (lit quoted)) ()
         (let ((text (Str8 trim (List second item))))
           (if (= (Str8 length text) 0) (%bx-kit m (lit zero))
@@ -908,7 +929,7 @@
     (unless (%bx-string-name? m (List second target)) (%bx-fail "TM"))
     (let ((line (%bx-reply m "")))
       (if (null? line) (lit end)
-        (do (%bx-set! m target line) ())))))
+        (do (%bx-set! m target (%bx-text-of line)) ())))))
 
 ; WRITE: each value, a string in quotes and a number as FOUT makes it
 ; without the blank for its sign, commas between, then a new line
@@ -922,7 +943,7 @@
                       (if (pair? v)
                         (let ((s ((%bx-kit m (lit ->str)) v)))
                           (if (Str8 starts? " " s) (Str8 sub 1 (int- (Str8 length s) 1) s) s))
-                        (Str8 append "\"" (%bx-string v) "\""))))
+                        (Str8 append "\"" (%bx-shown (%bx-string v)) "\""))))
                   (self (rest es) ",")))))
       (go es "")
       (%bx-newline m))))
@@ -1093,7 +1114,7 @@
                   (let ((k ((m get (lit key)))))
                     (if (null? k) (lit end)
                       (if (%bx-string-name? m (List second (first ts)))
-                        (do (%bx-set! m (first ts) (bytes->str (list k)))
+                        (do (%bx-set! m (first ts) (%bx-text (list k)))
                             (self (rest ts) #f))
                         (do (%bx-set! m (first ts) (%bx-key-number m k))
                             (self (rest ts) (or (int= k 44) (int= k 58)))))))))))

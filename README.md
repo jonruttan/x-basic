@@ -49,7 +49,9 @@ The 6502 dialect (`lib/basic/m6502.x`):
 - **Functions.** `SGN INT ABS LEN STR$ VAL ASC CHR$ LEFT$ RIGHT$ MID$
   POS FRE PEEK USR`, and `SQR RND LOG EXP SIN COS TAN ATN` with `^` as
   `EXP(Y*LOG(X))`, step for step from the source's tables
-  (`lib/basic/mbf-math.x`).
+  (`lib/basic/mbf-math.x`). A string's bytes are kept as a list, so a
+  zero byte (`CHR$(0)`) is counted, compared and stored like any other;
+  `VAL` reads to it, and the terminal is not sent it.
 - **Start-up.** `MEMORY SIZE?` and `WIDTH?`, as the KIM build's INIT
   asks them: a blank size takes RAM to $C000, a blank width keeps 72
   columns, and an answer that does not read is asked again. Then the
