@@ -363,6 +363,28 @@
                     (pair (List reverse (pair (first got) acc)) (rest got)))))))
       (go ts ()))))
 
+; USING F; V [;|, V]... to the end of the statement (PRINUS): the item
+; (using F VALUES END), END 'crlf when the list ends the statement, 'none
+; after a last ; or , and 'sn when something else follows a value, which
+; FNSTRF finds only once that value is printed
+(def %bp-using
+  (fn (_ d ts)
+    (let ((f (basic-parse-expr d ts)))
+      (let ((ts (%bp-expect-c (rest f) ";"))
+            (skip (fn (self ts) (if (%bp-end? ts) ts (self (rest ts))))))
+        (if (%bp-end? ts) (pair (list (lit using) (first f) () (lit none)) ts)
+          (let ((go (fn (self ts acc)
+                      (let ((got (basic-parse-expr d ts)))
+                        (let ((acc (pair (first got) acc)) (ts (rest got)))
+                          (match
+                            ((%bp-end? ts) (pair (list (lit using) (first f) (List reverse acc) (lit crlf)) ts))
+                            ((or (%bp-c? ts ";") (%bp-c? ts ","))
+                              (if (%bp-end? (rest ts))
+                                (pair (list (lit using) (first f) (List reverse acc) (lit none)) (rest ts))
+                                (self (rest ts) acc)))
+                            (#t (pair (list (lit using) (first f) (List reverse acc) (lit sn)) (skip ts)))))))))
+            (go ts ())))))))
+
 (def %bp-print-items
   (fn (_ d ts)
     (let ((go (fn (self ts acc)
@@ -370,6 +392,9 @@
                   ((%bp-end? ts) (pair (List reverse acc) ts))
                   ((%bp-c? ts ";") (self (rest ts) (pair (list (lit semi)) acc)))
                   ((%bp-c? ts ",") (self (rest ts) (pair (list (lit comma)) acc)))
+                  ((%bp-kw? ts "USING")
+                    (let ((got (%bp-using d (rest ts))))
+                      (pair (List reverse (pair (first got) acc)) (rest got))))
                   ((or (%bp-kw? ts "TAB(") (%bp-kw? ts "SPC("))
                     (let ((got (basic-parse-expr d (rest ts))))
                       (self (%bp-expect-c (rest got) ")")

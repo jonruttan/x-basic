@@ -126,7 +126,11 @@ way (`lib/basic/gwbasic.x`), run by the same machine with
   them back (DSKCOM.ASM).
 - **Output and input.** `WRITE`, strings in quotes and numbers without
   the blank for their sign, commas between (FIVEO.ASM); `LINE INPUT`,
-  the whole line typed into a string, with no question mark.
+  the whole line typed into a string, with no question mark. `PRINT
+  USING` as BIPRTU.ASM scans its format: `#`, `.`, `,`, `+` and a
+  trailing `-`, `**`, `$$`, `**$` and `^^^^`; `!`, `\ \` and `&`; `_`;
+  the format again while values are left. Each number is built as PUFOUT
+  builds it in FBUFF, a `%` ahead of one too wide for its field.
 - **Errors.** `ON ERROR GOTO`, `RESUME` (the erring statement, `NEXT` or
   a line), `ERROR` and the numbers `ERR` and `ERL` give, as GWMAIN.ASM
   traps them: the line typed is trapped too (`ERL` 65535), an error in
