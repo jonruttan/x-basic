@@ -237,6 +237,8 @@
       ; nothing after them, and a word ending "(" ends there
       (lit crunch) (lit name-start)
       (lit prefix-words) (list "FN" "USR")
+      ; GO and blanks before TO or SUB, as CRUNCH's GOSTEX check reads them
+      (lit go-words) #t
       ; RND with no argument is RND(1); ERR and ERL take none
       (lit bare-calls) (list "RND" "ERR" "ERL")
       ; CRUNCH puts a colon before ELSE

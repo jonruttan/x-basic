@@ -106,7 +106,9 @@ way (`lib/basic/gwbasic.x`), run by the same machine with
 - **Lines.** The 8086's tokens. A reserved word is taken only where a
   name could not go on, so `FORI` is a name and `FOR I` a loop; `'`
   starts a remark. Names keep 40 characters and a `$`, `%`, `!` or `#`;
-  one without a sign is a single.
+  one without a sign is a single. `GO` and blanks before `TO` or `SUB`
+  are read as CRUNCH reads them: `GO SUB` with one blank, and `GO  TO`
+  with two or more, since CHRGTR steps a byte past the first.
 - **Memory.** Variables laid out as the 8086 lays them out: VALTYP, the
   name, then two, three, four or eight bytes of value. The program from
   $1000 and memory to 512 bytes under 64K (the build decides both), so
@@ -140,7 +142,7 @@ way (`lib/basic/gwbasic.x`), run by the same machine with
 
 Those it does not run, and the words the KIM runs that mean another thing
 here (`SAVE`, `LOAD`, `GET`, `WAIT`), print `SAVE is not in x-basic yet`.
-Not yet: `GO TO` with a blank, DEF FN's memory entries, LIST of the
+Not yet: DEF FN's memory entries, LIST of the
 crunched text, and the line editor after a syntax error.
 
 A
