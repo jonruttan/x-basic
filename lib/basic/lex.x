@@ -116,6 +116,40 @@
 (def %basic-read
   (fn (_ dialect text) (%basic-spans dialect ((%basic-lexer dialect) read-str text))))
 
+; TOKS with GO and blanks before TO or UB made GOTO or GOSUB, where the
+; dialect has go-words (CRUNCH's GOSTEX check): "GO " matched, then CHRGTR
+; steps one byte on and past blanks, then TO, else UB from where TO's match
+; stopped.  So GO SUB with one blank is GOSUB, and GO TO needs two.
+(def %basic-go-words
+  (fn (_ dialect toks)
+    (if (not (dialect get-or #f (lit go-words))) toks
+      (let ((go (fn (self ts acc)
+                  (if (null? ts) (List reverse acc)
+                    (let ((t (first ts)))
+                      (if (not (and (eq? (first t) (lit name)) (str=? (List second t) "GO")
+                                    (not (null? (rest ts))) (Str8 starts? " " (List second (first (rest ts))))))
+                        (self (rest ts) (pair t acc))
+                        (let ((text (%basic-joined (rest ts))))
+                          (let ((n (Str8 length text)))
+                            (let ((at (fn (_ i) (if (int< i n) (str-byte-ref text i) 0)))
+                                  (blanks (fn (self i) (if (and (int< i n) (int= (str-byte-ref text i) 32)) (self (int+ i 1)) i))))
+                              (let ((word-at (fn (_ i word)
+                                             (let ((k (Str8 length word)))
+                                               (let ((step (fn (self i j)
+                                                             (match
+                                                               ((not (int< j k)) (pair #t i))
+                                                               ((int= (at i) (str-byte-ref word j)) (self (int+ i 1) (int+ j 1)))
+                                                               (#t (pair #f i))))))
+                                                 (step i 0))))))
+                                (let ((to (word-at (blanks 2) "TO")))
+                                  (let ((hit (if (first to) (pair "GOTO" (rest to))
+                                               (let ((ub (word-at (rest to) "UB")))
+                                                 (if (first ub) (pair "GOSUB" (rest ub)) ())))))
+                                    (if (null? hit) (self (rest ts) (pair t acc))
+                                      (self (%basic-read dialect (Str8 sub (rest hit) (int- n (rest hit)) text))
+                                            (pair (list (lit kw) (first hit)) acc)))))))))))))))
+        (go toks ())))))
+
 ; TEXT's tokens without the blanks, each alias spelled as the word it
 ; stands for, and each string constant (str TEXT ORD), ORD its place among
 ; the line's strings
@@ -133,7 +167,7 @@
                         ((eq? (first tok) (lit str))
                           (self (rest toks) (int+ k 1) (pair (list (lit str) (List second tok) k) acc)))
                         (#t (self (rest toks) k (pair tok acc)))))))))
-        (go (%basic-read dialect text) 0 ())))))
+        (go (%basic-go-words dialect (%basic-read dialect text)) 0 ())))))
 
 ; Where a span token's own text starts: past REM's, ''s and DATA's word,
 ; which is folded with the rest
@@ -233,7 +267,7 @@
                     ((eq? tag (lit str))
                       (do (put 34) (mark (lit strs)) (put-all (List drop 1 (%basic-bytes text)))))
                     (#t (put-all (%basic-bytes text))))))
-              (%basic-read dialect text))
+              (%basic-go-words dialect (%basic-read dialect text)))
             (list (List reverse (out get (lit bytes)))
                   (List reverse (out get (lit strs)))
                   (List reverse (out get (lit datas))))))))))
