@@ -184,7 +184,9 @@
         (pair "RIGHT$" (list 2)) (pair "MID$" (list 2 3))
         (pair "CINT" (list 1)) (pair "CSNG" (list 1)) (pair "CDBL" (list 1)) (pair "FIX" (list 1))
         (pair "HEX$" (list 1)) (pair "OCT$" (list 1)) (pair "SPACE$" (list 1))
-        (pair "STRING$" (list 2)) (pair "INSTR" (list 2 3))))
+        (pair "STRING$" (list 2)) (pair "INSTR" (list 2 3))
+        (pair "MKI$" (list 1)) (pair "MKS$" (list 1)) (pair "MKD$" (list 1))
+        (pair "CVI" (list 1)) (pair "CVS" (list 1)) (pair "CVD" (list 1))))
 
 (def %bp-primary
   (fn (_ d ts)

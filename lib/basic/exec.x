@@ -694,6 +694,10 @@
                                 (#t (self (int+ at 1) (rest left)))))))
                     (go (int- i 1) (List drop (int- i 1) s1))))))))))))
 
+; MKI$, MKS$ and MKD$, CVI, CVS and CVD, by the type each makes or reads
+(def %bx-packs (list (pair "MKI$" 2) (pair "MKS$" 4) (pair "MKD$" 8)))
+(def %bx-unpacks (list (pair "CVI" 2) (pair "CVS" 4) (pair "CVD" 8)))
+
 (def %bx-call
   (fn (_ m word args)
     (let ((a (if (null? args) () (first args))))
@@ -738,6 +742,16 @@
               (if (pair? c) (%bx-byte m c)
                 (let ((s (%bx-string c))) (if (null? s) (%bx-fail "FC") (first s)))))))
         ((str=? word "INSTR") (%bx-instr m args))
+        ; a number made a string of its bytes as a variable holds them,
+        ; forced to the type first (DOCNVF); and back, from the string's
+        ; first bytes, ?FC when it is shorter
+        ((List find (fn (_ p) (str=? (first p) word)) %bx-packs)
+          (let ((k (rest (List find (fn (_ p) (str=? (first p) word)) %bx-packs))))
+            (%bx-text ((%bx-kit m (lit ->bytes)) k ((%bx-kit m (lit fit)) k (%bx-number a))))))
+        ((List find (fn (_ p) (str=? (first p) word)) %bx-unpacks)
+          (let ((k (rest (List find (fn (_ p) (str=? (first p) word)) %bx-unpacks))) (s (%bx-string a)))
+            (if (int< (List length s) k) (%bx-fail "FC")
+              ((%bx-kit m (lit from-bytes)) k (List take k s)))))
         ((str=? word "ERR") (%bx-int m (m get-or 0 (lit err))))
         ((str=? word "ERL") ((%bx-kit m (lit line-value)) (m get-or 0 (lit erl))))
         ; RND with no argument is RND(1) (RNDMON)
