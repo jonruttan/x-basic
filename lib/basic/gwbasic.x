@@ -23,7 +23,7 @@
 (import basic/mbf86
   m86-int m86-integer m86-zero? m86->single m86->double m86-cint m86-floor
   m86-neg m86-abs m86-sgn m86-add m86-sub m86-mul m86-div m86-idiv m86-mod m86-cmp
-  m86->bytes m86-from-bytes m86->str m86-read)
+  m86->bytes m86-from-bytes m86->str m86-using m86-read)
 (import basic/mbf86-math
   m86-sqr m86-log m86-exp m86-sin m86-cos m86-tan m86-atn m86-power
   m86-rnd m86-rnd-seed m86-randomize)
@@ -125,6 +125,8 @@
       (lit integer) (fn (_ v) (m86-integer (m86-cint v)))
       (lit power) m86-power
       (lit ->str) m86->str
+      ; PRINT USING's numeric field (PUFOUT): the bytes
+      (lit using) m86-using
       (lit read) m86-read
       ; FRE's count, a single (m86->single floats an integer of any size)
       (lit fre) (fn (_ n) (m86->single (m86-int n)))

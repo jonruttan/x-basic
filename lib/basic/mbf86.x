@@ -753,6 +753,254 @@
             (pair (if (%m86-neg? v) 45 32)
                   (%m86-layout (%m86-fotcv (first got)) (rest got) (if (int= (first v) 8) 68 69)))))))))
 
+; --- PRINT USING out ------------------------------------------------------
+
+; PUFOUT builds the number in FBUFF and its routines move through it with
+; BX; here a vector of slots: the buffer, BX, CH and CL (the counts $FOTED
+; counts down to the point and the next comma) and $DPADR.  FBUFF is at
+; %pu-fbuff, room before it for what $FOTZS and $PUFXE put ahead of the sign.
+(def %pu-fbuff 4)
+
+(def %pu-state
+  (fn (_) (Vector from-list (list (Vector make 320 0) (int+ %pu-fbuff 1) 0 0 0))))
+
+(def %pu-buf (fn (_ s) (Vector ref 0 s)))
+(def %pu-bx (fn (_ s) (Vector ref 1 s)))
+(def %pu-bx! (fn (_ s n) (Vector set! 1 n s)))
+(def %pu-at (fn (_ s i) (Vector ref i (%pu-buf s))))
+(def %pu-at! (fn (_ s i b) (Vector set! i b (%pu-buf s))))
+(def %pu-regs! (fn (_ s ch cl) (do (Vector set! 2 (int& ch 255) s) (Vector set! 3 (int& cl 255) s))))
+
+; B at BX, BX on
+(def %pu-put!
+  (fn (_ s b) (do (%pu-at! s (%pu-bx s) b) (%pu-bx! s (int+ (%pu-bx s) 1)))))
+
+; $FOTED: the point when CH counts down to it, else a comma when CL does
+(def %pu-foted!
+  (fn (_ s)
+    (let ((ch (int& (int- (Vector ref 2 s) 1) 255)))
+      (if (int= ch 0)
+        (do (Vector set! 4 (%pu-bx s) s) (%pu-put! s 46) (%pu-regs! s 0 0))
+        (let ((cl (int& (int- (Vector ref 3 s) 1) 255)))
+          (if (int= cl 0) (do (%pu-put! s 44) (%pu-regs! s ch 3)) (%pu-regs! s ch cl)))))))
+
+; $FOTZ: N zeros
+(def %pu-fotz!
+  (fn (_ s n)
+    (List for-each (fn (_ i) (%pu-put! s 48)) (List range 0 (int& n 255)))))
+
+; $FOTZC: N zeros, $FOTED between them
+(def %pu-fotzc!
+  (fn (self s n)
+    (do (%pu-put! s 48)
+        (let ((n (int& (int- n 1) 255)))
+          (unless (int= n 0) (%pu-foted! s) (self s n))))))
+
+; DIGITS, $FOTED before each and after the last ($FOTCV, $FOTCI)
+(def %pu-digits!
+  (fn (_ s digits)
+    (do (List for-each (fn (_ d) (%pu-foted! s) (%pu-put! s d)) digits)
+        (%pu-foted! s))))
+
+; The integer N's five digits ($FOTCI)
+(def %pu-five
+  (fn (_ n)
+    (List map (fn (_ p) (int+ 48 (int% (int/ n p) 10))) (list 10000 1000 100 10 1))))
+
+; CHRGTR on the buffer: BX on past blanks, the byte there
+(def %pu-chrgt!
+  (fn (self s)
+    (do (%pu-bx! s (int+ (%pu-bx s) 1))
+        (let ((b (%pu-at s (%pu-bx s))))
+          (if (int= b 32) (self s) b)))))
+
+(def %pu-end? (fn (_ b) (or (int= b 0) (int= b 58))))
+(def %pu-digit? (fn (_ b) (and (not (int< b 48)) (int< b 58))))
+
+; $FOTZS: leading zeros and commas made the fill, blanks or asterisks, a
+; zero put back before a point or the end, then the floating $ and the
+; sign; answers the sign when it trails, else nil
+(def %pu-fotzs!
+  (fn (_ s flags)
+    (let ((fb (int+ %pu-fbuff 1)))
+      (let ((sign (%pu-at s fb)) (star (not (int= (int& flags 32) 0)))
+            (trails (not (int= (int& flags 4) 0))))
+        (let ((sign (if (and star (int= sign 32) (not trails)) 42 sign)) (fill (if star 42 32)))
+          (%pu-bx! s fb)
+          (let ((scan (fn (self)
+                        (do (%pu-at! s (%pu-bx s) fill)
+                            (let ((b (%pu-chrgt! s)))
+                              (match
+                                ((%pu-end? b) (lit zero))
+                                ((or (int= b 44) (int= b 48)) (self))
+                                ((List includes? b (list 46 101 68)) (lit zero))
+                                (#t (lit sign))))))))
+            (when (eq? (scan) (lit zero))
+              (%pu-bx! s (int- (%pu-bx s) 1)) (%pu-at! s (%pu-bx s) 48))
+            (unless (int= (int& flags 16) 0)
+              (%pu-bx! s (int- (%pu-bx s) 1)) (%pu-at! s (%pu-bx s) 36))
+            (if trails sign
+              (do (%pu-bx! s (int- (%pu-bx s) 1)) (%pu-at! s (%pu-bx s) sign) ()))))))))
+
+; The buffer's bytes from I to its zero
+(def %pu-from
+  (fn (_ s i)
+    (let ((go (fn (self i acc)
+                (let ((b (%pu-at s i)))
+                  (if (int= b 0) (List reverse acc) (self (int+ i 1) (pair b acc)))))))
+      (go i ()))))
+
+; $PUFXE: zero suppression, the trailing sign, then the field fitted to
+; LEFT places before the point: leading blanks and asterisks dropped, and a
+; leading zero before the point's digits, else a % ahead of it all
+(def %pu-fixe!
+  (fn (_ s flags left)
+    (let ((end (%pu-bx s)))
+      (let ((sign (%pu-fotzs! s flags)))
+        (let ((end (if (null? sign) end (do (%pu-at! s end sign) (int+ end 1)))))
+          (%pu-at! s end 0)
+          (let ((fit (fn (self bx)
+                       (if (int= (int- (int- (Vector ref 4 s) bx) left) 0) (%pu-from s bx)
+                         (let ((b (%pu-at s bx)))
+                           (if (or (int= b 32) (int= b 42)) (self (int+ bx 1))
+                             (let ((start (int- bx 1)))
+                               (%pu-bx! s start)
+                               (let ((keep (fn (again acc)
+                                             (let ((b (%pu-chrgt! s)))
+                                               (match
+                                                 ((List includes? b (list 45 43 36)) (again (pair b acc)))
+                                                 ((and (int= b 48)
+                                                       (do (%pu-bx! s (int+ (%pu-bx s) 1))
+                                                           (%pu-digit? (%pu-chrgt! s))))
+                                                   (let ((at (int- (%pu-bx s) 1)))
+                                                     (List fold (fn (_ at b) (do (%pu-at! s (int- at 1) b) (int- at 1)))
+                                                       at acc)))
+                                                 (#t (do (%pu-at! s start 37) (lit percent))))))))
+                                 (let ((got (keep ())))
+                                   (if (eq? got (lit percent)) (%pu-from s start) (self got)))))))))))
+            (fit (int+ %pu-fbuff 1))))))))
+
+; $DIV10: times .1, a single by $DPM01 made one
+(def %pu-div10
+  (fn (_ v) (if (int= (first v) 8) (%d-mul v %m86-tenth) (%s-mul v (%m86-csd %m86-tenth)))))
+
+(def %pu-div10s
+  (fn (self v n) (if (int< n 1) v (self (%pu-div10 v) (int- n 1)))))
+
+; $PUEXP: E or D, the sign and two digits
+(def %pu-puexp!
+  (fn (_ s kind x)
+    (do (%pu-put! s (if (int= kind 8) 68 69))
+        (%pu-put! s (if (int< x 0) 45 43))
+        (let ((x (if (int< x 0) (int- 0 x) x)))
+          (%pu-put! s (int+ 48 (int/ x 10)))
+          (%pu-put! s (int+ 48 (int% x 10))))
+        (%pu-at! s (%pu-bx s) 0))))
+
+; Whether the sign takes a place of LEFT: some, and it leads
+(def %pu-sign-place? (fn (_ flags left) (and (not (int= left 0)) (int= (int& flags 4) 0))))
+
+; $PUFE: V, a positive single or double, in E or D notation
+(def %pu-pufe!
+  (fn (_ s v flags left right)
+    (let ((kind (first v)) (zero (m86-zero? v)))
+      (let ((n (if (int= kind 8) 16 7)))
+        (let ((got (if zero (pair v 0) (%m86-fotnv v))))
+          (let ((want (int- (int+ left (if (int= right 0) 0 (int- right 1)))
+                            (if (%pu-sign-place? flags left) 1 0))))
+            (let ((diff (int- want n)))
+              (let ((r (if (not (int< diff 0)) (list (first got) (rest got) 0)
+                         (let ((w (m86-floor ((if (int= kind 8) %d-add %s-add)
+                                               (%pu-div10s (first got) (int- 0 diff))
+                                               (if (int= kind 8) %m86-half-double %m86-half-single)))))
+                           (let ((p (Vector ref (int+ n diff) %m86-powers)))
+                             (if (int< (m86-cmp w (if (int= kind 8) p (%m86-csd p))) 0)
+                               (list w (rest got) (int- 0 diff))
+                               (list (%pu-div10 w) (int+ (rest got) 1) (int- 0 diff))))))))
+                (let ((ch (int- (int+ (int+ (List third r) left) 1) (if (%pu-sign-place? flags left) 1 0))))
+                  (%pu-regs! s ch 0)
+                  (%pu-digits! s (%m86-fotcv (first r)))
+                  (when (int< 0 diff) (%pu-fotzc! s diff) (%pu-foted! s))
+                  (when (int= right 0)
+                    (%pu-bx! s (int- (%pu-bx s) 1))
+                    (unless (int= (%pu-at s (%pu-bx s)) 46) (%pu-bx! s (int+ (%pu-bx s) 1)))
+                    (Vector set! 4 (%pu-bx s) s))
+                  (%pu-puexp! s kind
+                    (if zero (List second r)
+                      (int+ (int- (int+ (List second r) n) left) (if (%pu-sign-place? flags left) 1 0))))
+                  (%pu-fixe! s flags left))))))))))
+
+; DPCOM: CH the places to the point, the sign's counted; CL to the first
+; comma, when there are commas
+(def %pu-dpcom!
+  (fn (_ s flags ch dl cl)
+    (let ((a (int+ (int- (int+ ch dl) cl) 1)))
+      (let ((c (let ((go (fn (self c) (if (int< 0 c) (self (int- c 3)) c)))) (int+ (go (int- a 3)) 3))))
+        (%pu-regs! s a (if (int= (int& flags 64) 0) 0 c))))))
+
+; $PUIZ: no point when RIGHT is 0, else RIGHT - 1 zeros after it
+(def %pu-puiz!
+  (fn (_ s flags left right)
+    (do (when (int= right 0) (%pu-bx! s (int- (%pu-bx s) 1)))
+        (when (int< 1 right) (%pu-fotz! s (int- right 1)))
+        (%pu-at! s (%pu-bx s) 0)
+        (%pu-fixe! s flags left))))
+
+; $PUF: V, a positive single or double, fixed: as FOUT gives it after a %
+; from 10^16; else its digits rounded where RIGHT ends them
+(def %pu-puf!
+  (fn (_ s v flags left right)
+    (let ((kind (first v)))
+      (let ((n (if (int= kind 8) 16 7)))
+        (if (not (int< (m86-cmp v (Vector ref 16 %m86-powers)) 0))
+          (let ((t (m86->str v))) (pair 37 (List map (fn (_ i) (str-byte-ref t i)) (List range 0 (Str8 length t)))))
+          (let ((got (if (m86-zero? v) (pair v 0) (%m86-fotnv v))))
+            (let ((dl (rest got)))
+              (if (not (int< dl 0))
+                (do (let ((t (int- (int+ dl n) left))) (when (int< t 0) (%pu-fotz! s (int- 0 t))))
+                    (%pu-dpcom! s flags n dl 0)
+                    (%pu-digits! s (%m86-fotcv (first got)))
+                    (unless (int= dl 0) (%pu-fotzc! s dl) (%pu-foted! s))
+                    (%pu-puiz! s flags left right))
+                (let ((dh (if (int= right 0) 0 (int- right 1))))
+                  (let ((cl (if (int< (int+ dh dl) 0) (int+ dh dl) 0)))
+                    (let ((w (%pu-div10s (first got) (int- 0 cl))))
+                      (if (int< (int+ (int- dl cl) n) 0)
+                        (do (%pu-fotz! s left)
+                            (Vector set! 4 (%pu-bx s) s)
+                            (%pu-put! s 46)
+                            (%pu-fotz! s (int- dh n))
+                            (%pu-regs! s 0 0))
+                        (do (let ((t (int+ (int- (int- left n) dl) cl))) (unless (int< t 0) (%pu-fotz! s t)))
+                            (%pu-dpcom! s flags n dl cl)))
+                      (%pu-digits! s (%m86-fotcv w))
+                      (if (int= right 0) (%pu-bx! s (Vector ref 4 s))
+                        (let ((t (int- (int+ right dl) 1))) (unless (int< t 0) (%pu-fotz! s t))))
+                      (%pu-fixe! s flags left))))))))))))
+
+; V as PRINT USING prints it in a numeric field ($PUFOT): FLAGS as the
+; scan sets them (64 commas, 32 asterisk fill, 16 floating $, 8 a + for a
+; positive sign, 4 the sign after, 1 E notation), LEFT the places before
+; the point, the sign's among them, RIGHT those after it and the point;
+; the bytes
+(def m86-using
+  (fn (_ v flags left right)
+    (let ((s (%pu-state)) (fb (int+ %pu-fbuff 1)))
+      (%pu-at! s fb (if (int= (int& flags 8) 0) 32 43))
+      (let ((neg (if (int= (first v) 2) (int< (m86-integer v) 0) (and (not (m86-zero? v)) (%m86-neg? v)))))
+        (let ((v (if neg (do (%pu-at! s fb 45) (m86-neg v)) v)))
+          (%pu-bx! s (int+ fb 1))
+          (%pu-at! s (%pu-bx s) 48)
+          (match
+            ((not (int= (first v) 2))
+              (if (int= (int& flags 1) 0) (%pu-puf! s v flags left right) (%pu-pufe! s v flags left right)))
+            ((not (int= (int& flags 1) 0)) (%pu-pufe! s (m86->single v) flags left right))
+            (#t
+              (do (when (not (int< left 5)) (%pu-fotz! s (int- left 5)))
+                  (%pu-regs! s 6 (if (int= (int& flags 64) 0) 0 3))
+                  (%pu-digits! s (%pu-five (m86-integer v)))
+                  (%pu-puiz! s flags left right)))))))))
+
 ; --- decimal text in ------------------------------------------------------
 
 (def %m86-digit? (fn (_ b) (and (not (int< b 48)) (int< b 58))))
@@ -855,4 +1103,4 @@
 (provide basic/mbf86
   m86-int m86-kind m86-integer m86-zero? m86-infinity m86-raise m86->single m86->double m86-cint m86-floor
   m86-neg m86-abs m86-sgn m86-add m86-sub m86-mul m86-div m86-idiv m86-mod m86-cmp
-  m86->bytes m86-from-bytes m86->str m86-read)
+  m86->bytes m86-from-bytes m86->str m86-using m86-read)
